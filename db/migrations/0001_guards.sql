@@ -123,7 +123,7 @@ ALTER TABLE "message_thread"
 -- audit_log: append-only
 --
 -- Enforced by trigger here. GRANT/REVOKE for the application role is deferred to
--- A3 (no such role exists yet) — tracked in CLAUDE.md section 11.
+-- A3 (no such role exists yet) — tracked in docs/state.md section 11.
 --------------------------------------------------------------------------------
 CREATE FUNCTION reject_audit_log_mutation() RETURNS trigger AS $$
 BEGIN

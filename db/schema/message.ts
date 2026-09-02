@@ -6,7 +6,7 @@ import { user } from './user';
 
 /**
  * A message in a thread. `body` is `internal` and must never be logged
- * (CLAUDE.md section 3). Deleted with its thread by the retention worker.
+ * (docs/agent-rules.md section 3). Deleted with its thread by the retention worker.
  */
 export const message = pgTable(
   'message',

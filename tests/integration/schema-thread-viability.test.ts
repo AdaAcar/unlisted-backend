@@ -4,7 +4,7 @@ import { ulid } from 'ulidx';
 import { freshDb, type TestDb } from './support/db';
 
 /**
- * The load-bearing structural guarantee (CLAUDE.md section 3, docs/modes.md):
+ * The load-bearing structural guarantee (docs/agent-rules.md section 3, docs/modes.md):
  *
  *   - No message_thread row may exist for a non-viable plan.
  *   - No message_thread row may represent a two-individual channel.

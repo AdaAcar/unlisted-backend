@@ -6,7 +6,7 @@ Current status, decisions, and known gaps. Maintained by whichever agent is work
 
 ## Handoff
 
-You are picking this up cold. Read `docs/agent-rules.md` in full first, then this whole file, then `todo_agent.md`. The A3 spec is `docs/a3-plan.md` — build from it; its open questions are already answered and folded in.
+You are picking this up cold. Read `docs/agent-rules.md` in full first, then this whole file, then `todo_agent.md`. The A3 spec is `docs/a3-plan.md` — build from it; the three design questions in it are answered and folded in. Separately, the **Open questions** subsection below lists things the previous agent inferred but did not decide — do not adopt those inferences silently, ask the user.
 
 ### Where things stand
 
@@ -49,19 +49,46 @@ Docker Desktop on this machine needed an interactive first-run before `pnpm db:u
 - **No Assembly table exists and none should.** `docs/data-model.md` describes an `Assembly` entity; it is deferred and explicitly not built. The three-person floor plus the viability gate cover what it would have done. Do not add assembly tables, endpoints, or workers.
 - **`data-model.md` and `api.md` predate the two-mode design.** Where they disagree with `docs/modes.md` (Plan `mode` / `viable_at` / `applications_closed_at`, the Assembly table, the `MessageThread` rule stated in participant-count terms, the `approve` endpoint), `modes.md` wins — this is settled, do not re-ask.
 
-### Things not written down elsewhere
+### Open questions — inferred, NOT decided. Ask the user; do not adopt the inference silently.
 
-- **Toolchain / environment.** Built on Windows 10, Node **v24.19.0**, pnpm **9.15.4** (pinned via `packageManager`). On the build machine, `node`/`pnpm` were not on the default `PATH` and had to be picked up from the Machine+User environment; a fresh agent's shell may differ. `.nvmrc` says `22`; `engines.node` is `>=22.13.0`.
-- **git.** Repo is initialized, branch `main`, ~8 commits, **no remote, never pushed**. Local git identity was set to `Ada <dinc.acar@gmail.com>` because no global git config existed — verify this is who you should be committing as. On Windows, PowerShell mangled a `git commit -m @'...'@` here-string containing `<`/`<=`; use `git commit -F <file>` for multi-line messages.
+The previous agent needed answers to these to reason about A2–A6 and wrote down a best guess. Each guess is marked **INFERRED**. The next agent that reaches code depending on one of these must put the question to the user and get a real answer before building on it. Record the answer here as a decision when you get it.
+
+1. **What "shared plan context" means for profile visibility.** `docs/agent-rules.md` section 3: "a profile is readable only if the actor shares a plan context with the subject, otherwise 404." The predicate is undefined. **INFERRED:** actor and subject are both non-withdrawn participants of the same plan — a confirmed/active member of one of the plan's circles, or an accepted/invited applicant — and, most likely, only once that plan is viable. Open sub-questions: does "applied but not yet accepted" count? does a cancelled/completed plan still grant visibility, and for how long? `users.getProfile` in A3 needs this pinned down.
+2. **Whether application closure flips `plan.state` or only sets a timestamp.** The schema has both a `plan_state` enum value `applications_closed` and a nullable `plan.applications_closed_at`. `docs/modes.md` gives the three closure conditions (spots filled / host closes / `starts_at`) but not which field(s) they write. **INFERRED:** closure sets `applications_closed_at` and moves `state` to `applications_closed` only when it happens *before* `starts_at`; reaching `starts_at` moves straight toward `completed`/`cancelled`. Not confirmed. Affects the Plan state machine (A6) and the discovery feed filter (C4).
+3. **The definition of "host size" in the publish-feasibility check.** `docs/modes.md`: publish requires `host size + open_spots >= MIN_PLAN_TOTAL`. **INFERRED:** "host size" = count of `circle_member` rows for the host circle with `status = 'active'` (confirmed members), not `invited` or `removed`. Not stated anywhere. Affects the Plan machine (A6) and C3.
+4. **What clears the tonight-mode hosting gate.** `docs/modes.md`: tonight mode is unavailable to hosts "below a minimum record threshold", and until a real threshold exists, "gate tonight mode behind at least one completed plan as a host or guest." **INFERRED:** the gate is satisfied when the host circle lead's `record.plans_attended > 0 OR record.circles_led > 0`. The mapping from "completed plan as host or guest" to concrete `record` columns is not written down. Affects C7b.
+
+### Tooling and environment facts
+
+- **Toolchain / environment.** Built on Windows 10, Node **v24.19.0**, pnpm **9.15.4** (pinned via `packageManager` — a fresh checkout needs Corepack enabled, `corepack enable`, or a global pnpm). On the build machine, `node`/`pnpm` were not on the default `PATH` and had to be picked up from the Machine+User environment; a fresh agent's shell may differ. `.nvmrc` says `22`; `engines.node` is `>=22.13.0`.
+- **git.** Repo is initialized, branch `main`, no remote, never pushed. Local git identity was set to `Ada <dinc.acar@gmail.com>` because no global git config existed — verify this is who you should be committing as. On Windows, PowerShell mangled a `git commit -m @'...'@` here-string containing `<`/`<=`; use `git commit -F <file>` for multi-line messages.
 - **Spec provenance.** The original spec bundles are `C:\Users\Ada\Desktop\Weddit\files.zip` (the five specs: architecture, data-model, api, security, safety) and `files_build.zip` (agent-rules content, todo, modes, product, todo). They are outside the repo. `docs/modes.md`, `docs/product.md`, `docs/todo.md` are the newer generation; the five specs were extracted from the older `files.zip` (2026-09-01) at the start of A2.
 - **`ulidx`, not `ulid`,** is the ULID library.
-- **`next lint` only lints the dirs named in the `lint` script's `--dir` flags.** If you add a new top-level source directory, add it to that script or it goes unlinted.
+- **`.env` loading is bespoke and Vitest-only.** `tests/setup/env.ts` reads `.env.local` then `.env` and never overrides a real env var — it runs **only under Vitest**. `next dev` reads `.env*` itself (Next's own loader). `drizzle-kit` reads `process.env` only: `pnpm db:migrate` needs `DATABASE_URL` exported in the shell, it will not pick up `.env.local`.
+- **`pnpm db:migrate` has never been run.** Migrations have only ever been applied by the programmatic `migrate()` in `tests/integration/support/db.ts` (`freshDb()`), which drops and recreates `public` + `drizzle` first. The `db:migrate` script is defined but untried against a persistent database.
+- **`docker-compose.yml` uses `tmpfs` for the Postgres data dir** — the test DB is wiped on every container restart. Fine for tests; surprising if you seed dev data and restart Docker.
+- **`noUncheckedIndexedAccess` is on.** `rows[0]` from a `pg`/Drizzle result is typed `T | undefined`. This caused two `tsc` failures while writing the A2 tests. Guard every indexed access into a DB result.
+- **`next lint` only lints the dirs named in the `lint` script's `--dir` flags.** If you add a new top-level source directory, add it to that script or it goes unlinted. (New subdirs of already-listed dirs like `db/` are fine.)
 - **`vitest.config.ts` sets `fileParallelism: false`** because the integration tests all `DROP SCHEMA public CASCADE` on one shared test database. Keep it until tests get per-file databases.
-- **`db/migrations/` is prettier-ignored** and drizzle-owned. `meta/` is machine-generated — never hand-edit. `0001_guards.sql` is the deliberate exception: hand-edited on purpose.
+- **`db/migrations/` is prettier-ignored** and drizzle-owned. `meta/` is machine-generated — never hand-edit. `0001_guards.sql` is the deliberate exception: hand-edited on purpose. Editing an already-applied migration file also risks a hash mismatch in drizzle's `__drizzle_migrations` on any persistent DB — for a schema change, add a new migration, don't edit `0000`/`0001`.
 - **No CI.** Tests are run by hand. There is no pipeline gating commits.
 - **`pnpm test` prints "The CJS build of Vite's Node API is deprecated"** — cosmetic, harmless, tests pass. It would go away with `"type": "module"`, which is deliberately not set (see Decisions).
-- **`AGENTS.md` and `CLAUDE.md` are identical 3-line stubs** that redirect here. `todo_agent.md`'s body still says "Read `CLAUDE.md` first"; that redirect works, but `docs/agent-rules.md` is the real entry point.
-- **Stale `CLAUDE.md section N` pointers in code comments.** Source comments in `db/schema/*.ts`, `next.config.ts`, `lib/config.ts`, `db/migrations/0001_guards.sql`, `todo_agent.md`, and a couple of test files still say "CLAUDE.md section N". The section numbers are unchanged, so section 1–8 refs now mean `docs/agent-rules.md` and section 9–11 refs mean `docs/state.md`. Left as-is in the handoff commit to keep it small; fix opportunistically when you touch those files.
+- **`AGENTS.md` and `CLAUDE.md` are identical 3-line stubs** that redirect here. `todo_agent.md`'s body still says "Read `CLAUDE.md` first" and references "`CLAUDE.md` section 4/5/3"; the redirect works and the section numbers match `docs/agent-rules.md`, but that file was not rewritten in the rename.
+
+### Rationale that must not be "simplified" away
+
+- **RLS scoping (A3) must use transaction-local GUCs** — `SELECT set_config('app.actor_id', …, true)` inside the transaction, never `SET SESSION`. The `pg` `Pool` reuses connections; a session-level GUC would leak one actor's scope into the next request handled by that connection. This is load-bearing, not a style choice.
+- **`withActor` (A3) must wrap read-only repository calls in a transaction too**, for the same reason — the GUC is transaction-scoped, so without the transaction RLS does not engage and the query is unscoped.
+- **The `viable_plan_key` FK-to-generated-column mechanism was verified on Postgres 16 specifically.** It relies on FK-to-a-`UNIQUE`-generated-column, which PG has supported since 12, but no other major version has been exercised here. If the Postgres version changes, re-run the A2 integration suite.
+- **`application.state` is one enum spanning both mode machines, gated by a mode-scoped `CHECK`** (see Decisions/A2). Consequence: adding a new state value later needs `ALTER TYPE application_state ADD VALUE …`, which **cannot run inside a transaction** on Postgres — such a migration must be its own non-transactional step. Do not "clean this up" into two enums without re-checking every `CHECK` and view that depends on the union.
+- **`lib/config.ts` reads nothing from the environment, by decision.** Do not add a `process.env` fallback "for flexibility" — `MIN_PLAN_TOTAL` in particular must not be movable by whoever controls the deployment.
+
+### External / undecided (not answerable from the repo)
+
+- **No git remote; every commit lands straight on `main`.** Branching strategy, PR flow, and review process are undefined. Ask before assuming one.
+- **No hosting target, staging, or production environment is chosen.** `docs/architecture.md` implies infra (S3-compatible storage, Redis, transactional mail/push, a queue) but names nothing. Redis, mail/push, object storage, and the KYC vendor are all "substitutable, pick later" — B2 ships only a stub verification vendor.
+- **The user's identity, timezone, working hours, and review latency are unknown.** Commits so far are attributed to `Ada <dinc.acar@gmail.com>` (see git note above).
+- **The open decisions in `docs/product.md`, `docs/safety.md`, and `docs/security.md`** (tonight-mode record threshold, business model, published composition rules, signal thresholds for quiet action, minimum on-call staffing and the plan-per-night cap, whether late-night venue categories run in year one, the minimum group sizes) are **not close to being answered**. `docs/agent-rules.md` section 7 says stop and ask on anything the docs mark as an open decision — treat all of these as live.
 
 ---
 

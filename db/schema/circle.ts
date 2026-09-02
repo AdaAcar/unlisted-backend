@@ -10,7 +10,7 @@ import { user } from './user';
  *
  * `lead_user_id` should always correspond to a `circle_member` row with
  * `role = 'lead'` and `status = 'active'`; that cross-row consistency is a domain
- * invariant, not a database constraint (see CLAUDE.md section 11).
+ * invariant, not a database constraint (see docs/state.md section 11).
  */
 export const circle = pgTable(
   'circle',

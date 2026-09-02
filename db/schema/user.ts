@@ -7,7 +7,7 @@ import { userStandingEnum, verificationStateEnum } from './enums';
 /**
  * A person. No surname is stored. The date of birth is never stored — the
  * verification vendor asserts 18+ and returns an age, and only the age is kept
- * (docs/data-model.md, CLAUDE.md section 3).
+ * (docs/data-model.md, docs/agent-rules.md section 3).
  *
  * `identity_hash` and `verification_ref` are `restricted`: encryption at rest
  * with a separate key and separate access control is applied in B2. They are on

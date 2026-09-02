@@ -15,7 +15,7 @@ import { user } from './user';
  *
  * Append-only is enforced in 0001_guards.sql by a trigger that rejects UPDATE
  * and DELETE. A GRANT/REVOKE for the application role is deferred to A3 (no such
- * role exists yet) — see CLAUDE.md section 11. The write-path helper the domain
+ * role exists yet) — see docs/state.md section 11. The write-path helper the domain
  * layer calls is A4.
  */
 export const auditLog = pgTable(

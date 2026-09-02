@@ -1,1 +1,1 @@
-# Integration tests land here. Every endpoint gets a deny-path test (CLAUDE.md section 8).
+# Integration tests land here. Every endpoint gets a deny-path test (docs/agent-rules.md section 8).

@@ -1,7 +1,7 @@
 /**
  * Product parameters for Unlisted.
  *
- * Every product parameter lives in this file (CLAUDE.md section 5). Never inline
+ * Every product parameter lives in this file (docs/agent-rules.md section 5). Never inline
  * one of these values anywhere else.
  *
  * These values are NOT readable from the environment. There is deliberately no

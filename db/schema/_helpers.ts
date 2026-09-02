@@ -5,7 +5,7 @@ import { ulid } from 'ulidx';
 
 /**
  * Shared column helpers. Every entity in this schema uses these so the
- * conventions in CLAUDE.md section 3 and docs/data-model.md are applied
+ * conventions in docs/agent-rules.md section 3 and docs/data-model.md are applied
  * uniformly: ULID identifiers (never sequential integers), `timestamptz`
  * everywhere, DB-defaulted timestamps.
  */
@@ -18,7 +18,7 @@ export const ULID_PATTERN = '^[0-7][0-9A-HJKMNP-TV-Z]{25}$';
 
 /**
  * Primary-key column: `varchar(26)`, generated application-side as a ULID.
- * Stored as text rather than `uuid` for debuggability (see CLAUDE.md section 10).
+ * Stored as text rather than `uuid` for debuggability (see docs/state.md section 10).
  */
 export const ulidPrimaryKey = (name = 'id') =>
   varchar(name, { length: ULID_LENGTH })

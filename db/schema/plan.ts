@@ -22,7 +22,7 @@ import { venue } from './venue';
  *   are not undone by a later withdrawal.
  * - Whether the plan PROCEEDS is a separate, live question: at `starts_at`, if
  *   `confirmed_total < MIN_PLAN_TOTAL` the plan auto-cancels regardless of
- *   `viable_at`. See CLAUDE.md section 10.
+ *   `viable_at`. See docs/state.md section 10.
  * - `held_count` tracks planned-mode invitation soft-holds. The capacity ceiling
  *   is `accepted_guest_count + held_count <= open_spots`, so an over-invitation
  *   cannot let two applicants accept the same spot.

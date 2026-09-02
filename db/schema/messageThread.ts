@@ -6,7 +6,7 @@ import { circle } from './circle';
 
 /**
  * A circle-to-circle thread scoped to a plan. Created ON VIABILITY, never on
- * invitation or approval (docs/modes.md, CLAUDE.md section 3).
+ * invitation or approval (docs/modes.md, docs/agent-rules.md section 3).
  *
  * "No thread on a non-viable plan" is structural, not a code check:
  * `plan_id` references `plan.viable_plan_key` — a generated column that equals
