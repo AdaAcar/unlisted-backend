@@ -19,6 +19,11 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    setupFiles: ['tests/setup/env.ts'],
+    // Integration tests drop and recreate the `public` schema of a single test
+    // database; running test files in parallel would let them clobber each
+    // other. The suite is small enough that serial files cost nothing.
+    fileParallelism: false,
     passWithNoTests: true,
   },
 });

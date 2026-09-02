@@ -1,0 +1,24 @@
+# Local Postgres for the integration test suite (and local dev).
+#   pnpm db:up     -> start
+#   pnpm db:down   -> stop and wipe
+#
+# The schema constraint tests run against this. They FAIL (not skip) when
+# TEST_DATABASE_URL is unset — a silently skipped constraint test is the exact
+# failure mode being guarded against.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: unlisted
+      POSTGRES_PASSWORD: unlisted
+      POSTGRES_DB: unlisted_test
+    ports:
+      - '5433:5432'
+    # Ephemeral: test data never needs to survive a restart.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U unlisted -d unlisted_test']
+      interval: 2s
+      timeout: 3s
+      retries: 15
