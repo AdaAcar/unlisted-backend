@@ -163,8 +163,8 @@ Never invent an answer to these. Stop and ask.
 | Task | Status | Notes |
 |---|---|---|
 | A1. Bootstrap | **done** | Folder skeleton, `lib/config.ts`, TS/ESLint/Prettier/Vitest config, scripts, `.nvmrc`, `.gitignore`/`.gitattributes`, git history. `docs/` created; `modes.md`, `product.md`, `todo.md` moved in untouched. Verified on Node v24.19.0 / pnpm 9.15.4: `pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test` (3 pass), `pnpm dev` (Ready) all clean. `pnpm-lock.yaml` committed. |
-| A2. Schema and migrations | **code complete; integration tests not yet executed** | 13 entities (no Assembly), `0000_init.sql` (drizzle-generated) + `0001_guards.sql` (hand-written: FK-to-generated-column, triggers, annotated `MIN_PLAN_TOTAL` literals, COMMENTs). `db/client.ts`, `lib/env.ts`, `drizzle.config.ts`, `docker-compose.yml`, `.env.example`. Verified: `pnpm typecheck`, `pnpm lint`, `pnpm test` unit suite (5 pass incl. the migration-parse test), and that `pnpm test` **fails loudly** without `TEST_DATABASE_URL`. **Not run:** the 3 integration test files (`schema-thread-viability`, `schema-smoke`) — the A2 session had no reachable Postgres (Docker Desktop needs interactive first-run; no local PG). To finish: `pnpm db:up`, set `TEST_DATABASE_URL` (`.env.example`), `pnpm test` — all green, then A2 is done. |
-| A3. Repository layer | not started | Actor-scoped repositories; block + enforcement filters inside the query. Also picks up the deferred items from A2 §11 (app DB role + `audit_log` REVOKE; RLS enablement). |
+| A2. Schema and migrations | **done** | 13 entities (no Assembly), `0000_init.sql` (drizzle-generated) + `0001_guards.sql` (hand-written: FK-to-generated-column, triggers, annotated `MIN_PLAN_TOTAL` literals, COMMENTs). `db/client.ts`, `lib/env.ts`, `drizzle.config.ts`, `docker-compose.yml`, `.env.example`. Verified: `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, full `pnpm test` green against Postgres 16 (`pnpm db:up`) — unit (migration-parse) + all integration (thread-viability FK, distinct-circles, participant floor, `viable_at` latch, append-only `audit_log`, non-ULID PK reject, migrations apply clean). `pnpm test` also verified to fail loudly without `TEST_DATABASE_URL`. |
+| A3. Repository layer | not started | Actor-scoped repositories; block + enforcement filters inside the query. Replaces hand-rolled `lib/env.ts` with Zod (dependency approved). Also picks up the deferred items from A2 §11 (app DB role + `audit_log` REVOKE; RLS enablement). |
 
 ## 10. Decisions made
 
@@ -196,7 +196,7 @@ Never invent an answer to these. Stop and ask.
 - **Native Postgres enums** (`pgEnum`), not text + `CHECK IN (…)`, so "valid state enums" is a DB guarantee. `application.state` is the union of both mode machines; a mode-scoped `CHECK` keeps `approved` out of planned and `invited`/`shortlisted`/… out of tonight.
 - **`plan.venue_type` and `plan.district` are denormalised from the venue** so the discovery query filters without a join. `district` is specified by `docs/data-model.md`; `venue_type` is the same rationale applied to the C4 type filter.
 - **`docs/data-model.md`'s "explicit transition log" = the `audit_log`** (before/after state per state-changing action). No per-entity transition tables.
-- **`lib/env.ts` is a hand-rolled validator, not Zod.** `zod` was not in the approved A2 dependency list and env parsing here is two connection strings. When a request-body schema first needs Zod (B1/A5), add it then. `env` values are read lazily via getters so importing the module never throws.
+- **`lib/env.ts` moves to Zod in A3.** `zod` is approved as a dependency (section 2 pinned stack). The A2 hand-rolled validator was a stopgap taken because `zod` was not on the approved A2 dep list; A3 replaces it. `env` values stay lazily read so importing the module never throws.
 - **`vitest.config.ts` sets `fileParallelism: false`.** Integration tests drop/recreate the `public` schema of one shared test DB; parallel files would clobber each other. Suite is small; serial costs nothing. Revisit with per-file databases if the suite grows.
 
 ## 11. Known gaps
@@ -209,7 +209,6 @@ Never invent an answer to these. Stop and ask.
 
 ### A2
 
-- **Integration tests were not executed against real Postgres in the A2 session.** No reachable DB (Docker Desktop needs interactive first-run; no local PG). The 3 files are written and `pnpm test` fails loudly without `TEST_DATABASE_URL`, but the 5 constraint assertions (thread-viability FK, distinct-circles, participant floor, `viable_at` latch, append-only `audit_log`, non-ULID PK) have **not been proven green**. First action for the next session with Docker: `pnpm db:up`, set `TEST_DATABASE_URL`, `pnpm test`; fix any fallout; then mark A2 done in §9.
 - **RLS is not enabled.** `docs/security.md` wants Postgres row-level security as defence in depth. Tables ship with RLS off; enabling it needs the actor model — A3/A5.
 - **Encryption at rest for `identity_hash` / `verification_ref` is not implemented.** They are separate columns with a `COMMENT` annotation only. Mechanism (pgcrypto or app-layer envelope + column-level access control) is **B2**.
 - **No application DB role exists, so `audit_log` append-only rests on triggers only.** The `REVOKE UPDATE, DELETE` is deferred to **A3** when the role is created. Noted in `0001_guards.sql`.
