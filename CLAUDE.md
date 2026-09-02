@@ -162,7 +162,7 @@ Never invent an answer to these. Stop and ask.
 
 | Task | Status | Notes |
 |---|---|---|
-| A1. Bootstrap | code complete, **verification blocked** | Folder skeleton, `lib/config.ts`, TS/ESLint/Prettier/Vitest config, scripts, `.nvmrc`, `.gitignore`, and git history all in place. `docs/` created; `modes.md`, `product.md`, `todo.md` moved into it untouched. **Not run:** `pnpm install`, `pnpm dev`, `pnpm lint`, `pnpm test` — no Node/pnpm toolchain on the build machine (needs Node >=22.13). No `pnpm-lock.yaml` yet. A1's "done when" is unmet until these run green on a real toolchain. |
+| A1. Bootstrap | **done** | Folder skeleton, `lib/config.ts`, TS/ESLint/Prettier/Vitest config, scripts, `.nvmrc`, `.gitignore`/`.gitattributes`, git history. `docs/` created; `modes.md`, `product.md`, `todo.md` moved in untouched. Verified on Node v24.19.0 / pnpm 9.15.4: `pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test` (3 pass), `pnpm dev` (Ready) all clean. `pnpm-lock.yaml` committed. |
 | A2. Schema and migrations | not started | Blocked on `docs/architecture.md`, `docs/data-model.md`, `docs/api.md`, `docs/security.md`, `docs/safety.md` being present in `docs/` (absent as of A1). Re-read `docs/data-model.md` + `docs/modes.md` schema deltas first. Install `ulidx` here, not before. |
 
 ## 10. Decisions made
@@ -175,17 +175,17 @@ Never invent an answer to these. Stop and ask.
 - **`@typescript-eslint/no-explicit-any` is `error` repo-wide.** CLAUDE.md section 2 forbids `any` only in `domain/` and `policy/`, but nothing in a backend of this shape needs it elsewhere, and one repo-wide rule is easier to keep honest than per-directory overrides. If a third-party type genuinely forces `any`, narrow it with an inline `// eslint-disable-next-line` + reason, do not loosen the rule.
 - **`lib/config.ts` has no environment override.** No `process.env` read, no fallback, no merge. The section 5 values are structural invariants, not deployment configuration — `MIN_PLAN_TOTAL` especially must not be movable by whoever controls the deployment. Infrastructure config (DB/Redis URLs, session secrets) will live in a separate env module added by the task that first needs it, and will never be merged into `config`.
 - **`next-env.d.ts` is committed, not gitignored.** Keeps `tsc --noEmit` working before the first `next dev` / `next build` generates it.
-- **Dependency versions are pinned exactly (no `^`).** The npm registry was unreachable at bootstrap, so versions are pinned to known-good releases; the first `pnpm install` produces `pnpm-lock.yaml`, which then governs.
-- **Package manager pinned via `packageManager: pnpm@9.15.4`; Node floor `>=22.13.0` in `engines` and `.nvmrc` = `22`.**
+- **Dependency versions are pinned exactly (no `^`).** The npm registry was unreachable at bootstrap, so versions are pinned to known-good releases; `pnpm-lock.yaml` (committed after the first install) now governs.
+- **Package manager pinned via `packageManager: pnpm@9.15.4`; Node floor `>=22.13.0` in `engines` and `.nvmrc` = `22`.** Verified toolchain is Node v24.19.0.
 - **`docs/` layout.** Specs live in `docs/`; `CLAUDE.md` and `todo_claude.md` stay at repo root.
+- **Vitest `@/*` alias is a direct `resolve.alias`, not `vite-tsconfig-paths`.** The package is not `"type": "module"`, so Vitest loads `vitest.config.ts` through a CommonJS `require`; `vite-tsconfig-paths` is ESM-only and blew up under `require`. Rejected `"type": "module"` (repo-wide semantic change — every `.js` becomes ESM, and any future CJS tool config, e.g. `.eslintrc.js` or a generated `*.config.js`, would need `.cjs`; not worth it for one file) and rejected renaming to `vitest.config.mts` (keeps the ESM-only dep plus an odd one-off extension). Instead: removed the dependency and set `resolve.alias['@'] = path.resolve(__dirname)`. Knock-ons: **`next.config.ts` and A2 are unaffected** — Next has its own TS/ESM config loader independent of `package.json` "type", and `drizzle-kit` loads `drizzle.config.ts` via its own esbuild loader. Cost: the `@` alias now lives in two files (`tsconfig.json` `paths` + `vitest.config.ts`), kept in sync by hand; it is one root-level entry. If aliases ever multiply, revisit via `vitest.config.mts` + `vite-tsconfig-paths`.
 
 ## 11. Known gaps
 
 *Maintained by Claude Code. Anything deliberately deferred, stubbed, or left incomplete. Be specific — a vague entry here is how a stub reaches production.*
 
-- **A1 is unverified.** `pnpm install` / `dev` / `lint` / `test` have never run — no Node toolchain on this machine, Docker daemon down. The config files, `package.json` scripts, and the `bootstrap.test.ts` smoke test are written but unproven. First action on a real toolchain: run all four, fix fallout, commit `pnpm-lock.yaml`.
-- **No `pnpm-lock.yaml`.** Created by the first `pnpm install`; commit it then.
 - **`app/` holds only `app/api/.gitkeep`.** No route handlers, no root layout. `next build` will produce an app with no routes. Expected until phase C.
+- **`pnpm test` prints "The CJS build of Vite's Node API is deprecated".** Cosmetic warning from Vitest 2.x loading its config via CJS; tests pass. It disappears with `"type": "module"`, which we are deliberately not adding (see section 10). Revisit if a Vitest/Vite upgrade makes it an error.
 - **Placeholder modules** (`domain/`, `policy/`, `db/`, `views/`, `workers/`) are `export {}` only.
 - **Spec files missing at A1:** `docs/architecture.md`, `docs/data-model.md`, `docs/api.md`, `docs/security.md`, `docs/safety.md` were not in the repo. A2 must not start until they are in `docs/`.
 - **No env module yet.** DB/Redis URLs and session secrets have no home; the task that first needs them adds `lib/env.ts` (Zod-parsed), separate from `lib/config.ts`.
