@@ -46,7 +46,7 @@ describe('migrations', () => {
     const { rows } = await t.pool.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`,
     );
-    expect(rows[0]?.n).toBe(2);
+    expect(rows[0]?.n).toBe(3);
   });
 
   it('installs the generated columns and the guard triggers', async () => {

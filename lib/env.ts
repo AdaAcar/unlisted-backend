@@ -1,46 +1,44 @@
-/**
- * Infrastructure configuration, read from the environment.
- *
- * Kept strictly separate from `lib/config.ts`: that file holds product
- * parameters (structural invariants) and never reads the environment; this file
- * holds deployment wiring (connection strings) and only reads the environment.
- * The two never merge.
- *
- * Values are read lazily through getters so that importing this module never
- * throws — a missing variable fails only when something actually needs it.
- */
+import { z } from 'zod';
 
-function parsePostgresUrl(name: string, raw: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error(`Environment variable ${name} is not a valid URL`);
-  }
-  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
-    throw new Error(`Environment variable ${name} must be a postgres:// connection string`);
-  }
-  return raw;
-}
+/** Infrastructure wiring only. Product invariants remain in `lib/config.ts`. */
 
-function optionalPostgresUrl(name: string): string | undefined {
+const postgresUrl = z
+  .url()
+  .refine((value) => value.startsWith('postgres://') || value.startsWith('postgresql://'), {
+    message: 'must be a postgres:// or postgresql:// connection string',
+  });
+
+function parsePostgresUrl(name: string, required: true): string;
+function parsePostgresUrl(name: string, required: false): string | undefined;
+function parsePostgresUrl(name: string, required: boolean): string | undefined {
   const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') return undefined;
-  return parsePostgresUrl(name, raw);
-}
-
-function requiredPostgresUrl(name: string): string {
-  const value = optionalPostgresUrl(name);
-  if (value === undefined) {
-    throw new Error(`Missing required environment variable: ${name}`);
+  if (raw === undefined || raw.trim() === '') {
+    if (required) throw new Error(`Missing required environment variable: ${name}`);
+    return undefined;
   }
-  return value;
+
+  const result = postgresUrl.safeParse(raw);
+  if (!result.success) {
+    const detail = result.error.issues.map((issue) => issue.message).join('; ');
+    throw new Error(`Invalid environment variable ${name}: ${detail}`);
+  }
+  return result.data;
 }
 
 export const env = {
   /** Primary database connection string. Required at runtime. */
   get databaseUrl(): string {
-    return requiredPostgresUrl('DATABASE_URL');
+    return parsePostgresUrl('DATABASE_URL', true);
+  },
+
+  /** RLS-subject application role used by every actor-scoped repository call. */
+  get appDatabaseUrl(): string {
+    return parsePostgresUrl('APP_DATABASE_URL', true);
+  },
+
+  /** BYPASSRLS role used only by the explicitly named `db/admin` surface. */
+  get adminDatabaseUrl(): string {
+    return parsePostgresUrl('ADMIN_DATABASE_URL', true);
   },
 
   /**
@@ -48,6 +46,6 @@ export const env = {
    * require this to be set — they fail rather than skip when it is absent.
    */
   get testDatabaseUrl(): string | undefined {
-    return optionalPostgresUrl('TEST_DATABASE_URL');
+    return parsePostgresUrl('TEST_DATABASE_URL', false);
   },
 };

@@ -14,28 +14,58 @@ import * as schema from './schema';
  * set — `tsc`, lint, and unit tests must not need a database.
  */
 
-let pool: Pool | undefined;
-let database: NodePgDatabase<typeof schema> | undefined;
+let ownerPool: Pool | undefined;
+let ownerDatabase: NodePgDatabase<typeof schema> | undefined;
+let appPool: Pool | undefined;
+let appDatabase: NodePgDatabase<typeof schema> | undefined;
+let adminPool: Pool | undefined;
+let adminDatabase: NodePgDatabase<typeof schema> | undefined;
 
 export function getPool(): Pool {
-  if (!pool) {
-    pool = new Pool({ connectionString: env.databaseUrl });
+  if (!ownerPool) {
+    ownerPool = new Pool({ connectionString: env.databaseUrl });
   }
-  return pool;
+  return ownerPool;
 }
 
 export function getDb(): NodePgDatabase<typeof schema> {
-  if (!database) {
-    database = drizzle(getPool(), { schema });
+  if (!ownerDatabase) {
+    ownerDatabase = drizzle(getPool(), { schema });
   }
-  return database;
+  return ownerDatabase;
+}
+
+/** Internal RLS-subject connection. Import only from `db/scope/`. */
+export function getAppDb(): NodePgDatabase<typeof schema> {
+  if (!appPool) {
+    appPool = new Pool({ connectionString: env.appDatabaseUrl });
+    const created = drizzle(appPool, { schema });
+    appDatabase = created;
+    return created;
+  }
+  if (!appDatabase) throw new Error('Application database initialization failed');
+  return appDatabase;
+}
+
+/** Internal BYPASSRLS connection. Import only from `db/scope/` or `db/admin/`. */
+export function getAdminDb(): NodePgDatabase<typeof schema> {
+  if (!adminPool) {
+    adminPool = new Pool({ connectionString: env.adminDatabaseUrl });
+    const created = drizzle(adminPool, { schema });
+    adminDatabase = created;
+    return created;
+  }
+  if (!adminDatabase) throw new Error('Admin database initialization failed');
+  return adminDatabase;
 }
 
 /** Close the pool. For test teardown and graceful shutdown. */
 export async function closeDb(): Promise<void> {
-  if (pool) {
-    await pool.end();
-    pool = undefined;
-    database = undefined;
-  }
+  await Promise.all([ownerPool?.end(), appPool?.end(), adminPool?.end()]);
+  ownerPool = undefined;
+  ownerDatabase = undefined;
+  appPool = undefined;
+  appDatabase = undefined;
+  adminPool = undefined;
+  adminDatabase = undefined;
 }
