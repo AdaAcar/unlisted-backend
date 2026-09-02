@@ -1,0 +1,2 @@
+# Adversarial tests land here: IDOR, enumeration, capacity races, ban evasion,
+# and a direct attack on each invariant in CLAUDE.md section 3.
