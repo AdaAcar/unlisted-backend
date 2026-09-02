@@ -3,3 +3,8 @@ node_modules
 coverage
 pnpm-lock.yaml
 next-env.d.ts
+
+# Read-only specs (CLAUDE.md section ownership) — never reformat these.
+docs/
+CLAUDE.md
+todo_claude.md
