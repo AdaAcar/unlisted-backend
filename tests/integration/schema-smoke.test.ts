@@ -43,11 +43,67 @@ describe('migrations', () => {
     );
   });
 
-  it('records both migrations as applied', async () => {
+  it('records the complete bootstrap stack through 0005', async () => {
     const { rows } = await t.pool.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`,
     );
-    expect(rows[0]?.n).toBe(5);
+    expect(rows[0]?.n).toBe(6);
+  });
+
+  it('hands the Drizzle ledger boundary to the migrator capability only', async () => {
+    const ownership = await t.pool.query<{
+      schema_owner: string;
+      table_owner: string;
+      sequence_owner: string;
+      migrator_database_create: boolean;
+    }>(
+      `SELECT
+         pg_get_userbyid(n.nspowner) AS schema_owner,
+         pg_get_userbyid(c.relowner) AS table_owner,
+         pg_get_userbyid(s.relowner) AS sequence_owner,
+         has_database_privilege(
+           'unlisted_migrator', current_database(), 'CREATE'
+         ) AS migrator_database_create
+       FROM pg_namespace n
+       JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = '__drizzle_migrations'
+       JOIN pg_class s ON s.oid = pg_get_serial_sequence(
+         'drizzle.__drizzle_migrations', 'id'
+       )::regclass
+       WHERE n.nspname = 'drizzle'`,
+    );
+    expect(ownership.rows).toEqual([
+      {
+        schema_owner: 'unlisted_migrator',
+        table_owner: 'unlisted_migrator',
+        sequence_owner: 'unlisted_migrator',
+        migrator_database_create: true,
+      },
+    ]);
+
+    for (const role of ['public', 'unlisted_app', 'unlisted_admin']) {
+      const privileges = await t.pool.query<{
+        schema_access: boolean;
+        table_access: boolean;
+        sequence_access: boolean;
+        database_create: boolean;
+      }>(
+        `SELECT
+           has_database_privilege($1, current_database(), 'CREATE') AS database_create,
+           has_schema_privilege($1, 'drizzle', 'USAGE') AS schema_access,
+           has_table_privilege($1, 'drizzle.__drizzle_migrations',
+             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS table_access,
+           has_sequence_privilege($1,
+             pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id'),
+             'USAGE,SELECT,UPDATE') AS sequence_access`,
+        [role],
+      );
+      expect(privileges.rows[0]).toEqual({
+        database_create: false,
+        schema_access: false,
+        table_access: false,
+        sequence_access: false,
+      });
+    }
   });
 
   it('installs the viable-plan introduction ledger as append-only', async () => {

@@ -157,41 +157,107 @@ describe('RLS deny by default', () => {
     ).toBe('false');
 
     const functions = await t.pool.query<{
+      adminCanExecute: boolean;
+      adminLoginCanExecute: boolean;
       appCanExecute: boolean;
+      appLoginCanExecute: boolean;
       config: string[] | null;
-      name: string;
+      deployerLoginCanExecute: boolean;
+      identity: string;
       owner: string;
+      ownerCanExecute: boolean;
+      publicCanExecute: boolean;
       securityDefiner: boolean;
     }>(
-      `SELECT p.proname AS name,
+      `SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS identity,
               pg_get_userbyid(p.proowner) AS owner,
               p.prosecdef AS "securityDefiner",
               p.proconfig AS config,
-              has_function_privilege('unlisted_app', p.oid, 'EXECUTE') AS "appCanExecute"
+              EXISTS (
+                SELECT 1
+                  FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) acl
+                 WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+              ) AS "publicCanExecute",
+              has_function_privilege('unlisted_app', p.oid, 'EXECUTE') AS "appCanExecute",
+              has_function_privilege('unlisted_admin', p.oid, 'EXECUTE') AS "adminCanExecute",
+              has_function_privilege('a3_test_app_login', p.oid, 'EXECUTE') AS "appLoginCanExecute",
+              has_function_privilege('a3_test_admin_login', p.oid, 'EXECUTE') AS "adminLoginCanExecute",
+              has_function_privilege(
+                'unlisted_test_deployer_login', p.oid, 'EXECUTE'
+              ) AS "deployerLoginCanExecute",
+              has_function_privilege(pg_get_userbyid(p.proowner), p.oid, 'EXECUTE') AS "ownerCanExecute"
        FROM pg_proc p
        WHERE p.pronamespace = 'public'::regnamespace
          AND p.proname IN (
+           'app_current_actor_id',
+           'app_actor_present',
+           'app_user_visible',
+           'app_circle_visible',
+           'app_plan_visible',
+           'app_application_visible',
+           'app_actor_hosts_circle',
            'reconcile_plan_participant_introductions',
            'reconcile_introductions_from_plan',
            'reconcile_introductions_from_application',
            'reconcile_introductions_from_application_member',
-           'app_shared_introduction_visible'
+           'app_shared_introduction_visible',
+           'generate_introduction_ulid',
+           'reject_plan_participant_introduction_mutation'
          )
-       ORDER BY p.proname`,
+       ORDER BY identity`,
     );
+    const appFunctions = new Set([
+      'app_current_actor_id()',
+      'app_actor_present()',
+      'app_user_visible(counterparty_user_id character varying)',
+      'app_circle_visible(counterparty_circle_id character varying)',
+      'app_plan_visible(counterparty_plan_id character varying)',
+      'app_application_visible(counterparty_application_id character varying)',
+      'app_actor_hosts_circle(counterparty_circle_id character varying)',
+      'app_shared_introduction_visible(subject_user_id character varying)',
+    ]);
+    const adminFunctions = new Set([
+      'app_current_actor_id()',
+      'app_actor_present()',
+      'app_user_visible(counterparty_user_id character varying)',
+      'app_circle_visible(counterparty_circle_id character varying)',
+      'app_plan_visible(counterparty_plan_id character varying)',
+      'app_application_visible(counterparty_application_id character varying)',
+      'app_actor_hosts_circle(counterparty_circle_id character varying)',
+    ]);
+    const populationFunctions = new Set([
+      'reconcile_plan_participant_introductions(target_plan_id character varying, introduction_time timestamp with time zone)',
+      'reconcile_introductions_from_plan()',
+      'reconcile_introductions_from_application()',
+      'reconcile_introductions_from_application_member()',
+    ]);
     for (const row of functions.rows) {
-      expect(row.owner).toBe('unlisted_migrator');
-      expect(row.securityDefiner).toBe(true);
-      expect(row.config).toContain('search_path=pg_catalog, public');
-      expect(row.appCanExecute).toBe(row.name === 'app_shared_introduction_visible');
+      expect(row.publicCanExecute).toBe(false);
+      expect(row.appCanExecute, row.identity).toBe(appFunctions.has(row.identity));
+      expect(row.adminCanExecute, row.identity).toBe(adminFunctions.has(row.identity));
+      expect(row.appLoginCanExecute).toBe(false);
+      expect(row.adminLoginCanExecute).toBe(false);
+      expect(row.deployerLoginCanExecute).toBe(false);
+      expect(row.ownerCanExecute).toBe(true);
+      if (populationFunctions.has(row.identity)) {
+        expect(row.owner).toBe('unlisted_migrator');
+        expect(row.securityDefiner).toBe(true);
+        expect(row.config).toContain('search_path=pg_catalog, public');
+        expect(row.appCanExecute).toBe(false);
+        expect(row.adminCanExecute).toBe(false);
+      }
     }
+    expect(functions.rows).toHaveLength(14);
   });
 
   it('grants app and admin exactly the six-table SELECT surface and no mutations', async () => {
     const privileges = await t.pool.query<{
       canDelete: boolean;
       canInsert: boolean;
+      canReferences: boolean;
       canSelect: boolean;
+      canTrigger: boolean;
+      canTruncate: boolean;
       canUpdate: boolean;
       grantee: string;
       tableName: string;
@@ -200,7 +266,10 @@ describe('RLS deny by default', () => {
               has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'SELECT') AS "canSelect",
               has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'INSERT') AS "canInsert",
               has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'UPDATE') AS "canUpdate",
-              has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'DELETE') AS "canDelete"
+              has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'DELETE') AS "canDelete",
+              has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'TRUNCATE') AS "canTruncate",
+              has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'REFERENCES') AS "canReferences",
+              has_table_privilege(role_name, format('%I.%I', 'public', table_name), 'TRIGGER') AS "canTrigger"
        FROM (VALUES ('unlisted_app'), ('unlisted_admin')) roles(role_name)
        CROSS JOIN information_schema.tables
        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -219,6 +288,9 @@ describe('RLS deny by default', () => {
       expect(row.canInsert).toBe(false);
       expect(row.canUpdate).toBe(false);
       expect(row.canDelete).toBe(false);
+      expect(row.canTruncate).toBe(false);
+      expect(row.canReferences).toBe(false);
+      expect(row.canTrigger).toBe(false);
     }
   });
 

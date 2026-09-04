@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
@@ -9,6 +11,8 @@ import * as schema from '@/db/schema';
 import { closeDb } from '@/db/client';
 
 const MIGRATIONS_FOLDER = resolve(__dirname, '../../../db/migrations');
+const MIGRATION_RUNNER = resolve(__dirname, '../../../db/migrate.mjs');
+const execFileAsync = promisify(execFile);
 
 /**
  * Resolve the test database URL, or fail loudly. These tests verify database
@@ -69,7 +73,7 @@ function loginUrl(role: string, password: string): string {
  * schema (entity tables) and the `drizzle` schema (migration bookkeeping) so
  * every call starts from nothing and re-runs every migration.
  */
-export async function freshDb(): Promise<TestDb> {
+export async function freshDb(options: { bootstrapRunner?: boolean } = {}): Promise<TestDb> {
   await closeDb();
   const pool = new Pool({ connectionString: testDatabaseUrl() });
   await pool.query(`DROP ROLE IF EXISTS ${TEST_LOGIN_ROLES.join(', ')}`);
@@ -78,7 +82,13 @@ export async function freshDb(): Promise<TestDb> {
   await pool.query('CREATE SCHEMA public');
 
   const db = drizzle(pool, { schema });
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+  if (options.bootstrapRunner) {
+    await execFileAsync(process.execPath, [MIGRATION_RUNNER, '--bootstrap'], {
+      env: { ...process.env, DATABASE_URL: testDatabaseUrl() },
+    });
+  } else {
+    await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
+  }
 
   const postMigrationRoles = (
     await pool.query<{

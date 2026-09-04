@@ -31,9 +31,12 @@
     {
       "files": [
         "db/client.ts",
+        "db/migrate.mjs",
         "db/scope/scoped.ts",
         "db/scope/resolve.ts",
         "db/admin/index.ts",
+        "tests/integration/migration-fail-closed.test.ts",
+        "tests/integration/migration-runner.test.ts",
         "tests/integration/support/db.ts",
         "tests/integration/rls-deny-by-default.test.ts",
         "tests/integration/repo-block-scoping.test.ts"

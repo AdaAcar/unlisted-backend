@@ -5,7 +5,6 @@ import { seedPublishedPlan, type PlanFixture } from './support/a3';
 import { freshDb, type TestDb } from './support/db';
 
 let t: TestDb;
-let fixture: PlanFixture;
 
 async function addUser(name: string): Promise<string> {
   const id = ulid();
@@ -14,6 +13,7 @@ async function addUser(name: string): Promise<string> {
 }
 
 async function addSoloApplication(
+  planId: string,
   userId: string,
   mode: 'planned' | 'tonight',
   state: string,
@@ -22,14 +22,29 @@ async function addSoloApplication(
   await t.pool.query(
     `INSERT INTO application (id, plan_id, solo_user_id, mode, state)
      VALUES ($1, $2, $3, $4, $5)`,
-    [id, fixture.planId, userId, mode, state],
+    [id, planId, userId, mode, state],
   );
   return id;
 }
 
+async function introducedUsers(planId: string): Promise<string[]> {
+  return (
+    await t.pool.query<{ user_id: string }>(
+      `SELECT user_id FROM plan_participant_introduction WHERE plan_id = $1 ORDER BY user_id`,
+      [planId],
+    )
+  ).rows.map((row) => row.user_id);
+}
+
+async function makeViable(fixture: PlanFixture): Promise<void> {
+  await t.pool.query(
+    `UPDATE plan SET confirmed_host_count = 3, viable_at = clock_timestamp() WHERE id = $1`,
+    [fixture.planId],
+  );
+}
+
 beforeAll(async () => {
   t = await freshDb();
-  fixture = await seedPublishedPlan(t);
 });
 
 afterAll(async () => {
@@ -38,6 +53,7 @@ afterAll(async () => {
 
 describe('plan participant introduction ledger', () => {
   it('rejects a row before viable_at through the viable-plan foreign key', async () => {
+    const fixture = await seedPublishedPlan(t);
     await expect(
       t.pool.query(
         `INSERT INTO plan_participant_introduction (id, plan_id, user_id, introduced_at)
@@ -48,51 +64,38 @@ describe('plan participant introduction ledger', () => {
   });
 
   it('atomically records the confirmed set at viability and never removes it', async () => {
+    const fixture = await seedPublishedPlan(t);
     const first = await addUser('First accepted guest');
     const second = await addUser('Second accepted guest');
-    const firstApplication = await addSoloApplication(first, 'planned', 'accepted');
-    await addSoloApplication(second, 'planned', 'accepted');
-
+    const firstApplication = await addSoloApplication(fixture.planId, first, 'planned', 'accepted');
+    await addSoloApplication(fixture.planId, second, 'planned', 'accepted');
     await t.pool.query(
-      `UPDATE plan
-       SET accepted_guest_count = 2, viable_at = clock_timestamp()
-       WHERE id = $1`,
+      `UPDATE plan SET accepted_guest_count = 2, viable_at = clock_timestamp() WHERE id = $1`,
       [fixture.planId],
     );
-
-    const introduced = await t.pool.query<{ user_id: string }>(
-      `SELECT user_id FROM plan_participant_introduction
-       WHERE plan_id = $1 ORDER BY user_id`,
-      [fixture.planId],
-    );
-    expect(introduced.rows.map((row) => row.user_id).sort()).toEqual(
-      [fixture.hostId, first, second].sort(),
-    );
-
+    expect(await introducedUsers(fixture.planId)).toEqual([fixture.hostId, first, second].sort());
     await t.pool.query(`UPDATE application SET state = 'withdrawn' WHERE id = $1`, [
       firstApplication,
     ]);
     await t.pool.query(`UPDATE plan SET accepted_guest_count = 1 WHERE id = $1`, [fixture.planId]);
-
-    expect(
-      (
-        await t.pool.query<{ user_id: string }>(
-          `SELECT user_id FROM plan_participant_introduction WHERE plan_id = $1`,
-          [fixture.planId],
-        )
-      ).rows.map((row) => row.user_id),
-    ).toContain(first);
+    expect(await introducedUsers(fixture.planId)).toContain(first);
   });
 
   it('adds later accepted participants but excludes every non-accepted state', async () => {
+    const fixture = await seedPublishedPlan(t);
+    await makeViable(fixture);
     const later = await addUser('Later accepted');
-    const laterApplication = await addSoloApplication(later, 'planned', 'submitted');
+    const laterApplication = await addSoloApplication(
+      fixture.planId,
+      later,
+      'planned',
+      'submitted',
+    );
     await t.pool.query(`UPDATE application SET state = 'accepted' WHERE id = $1`, [
       laterApplication,
     ]);
-    await t.pool.query(`UPDATE plan SET accepted_guest_count = 2 WHERE id = $1`, [fixture.planId]);
-
-    const excludedStates = [
+    const excluded: string[] = [];
+    for (const state of [
       'draft',
       'awaiting_confirmation',
       'submitted',
@@ -102,38 +105,19 @@ describe('plan participant introduction ledger', () => {
       'declined',
       'expired',
       'withdrawn',
-    ];
-    const excluded: string[] = [];
-    for (const state of excludedStates) {
+    ]) {
       const userId = await addUser(`Excluded ${state}`);
       excluded.push(userId);
-      await addSoloApplication(userId, 'planned', state);
+      await addSoloApplication(fixture.planId, userId, 'planned', state);
     }
-    await t.pool.query(
-      `UPDATE plan SET confirmed_host_count = confirmed_host_count WHERE id = $1`,
-      [fixture.planId],
-    );
-
-    const rows = await t.pool.query<{ user_id: string }>(
-      `SELECT user_id FROM plan_participant_introduction WHERE plan_id = $1`,
-      [fixture.planId],
-    );
-    const ids = rows.rows.map((row) => row.user_id);
+    const ids = await introducedUsers(fixture.planId);
     expect(ids).toContain(later);
     expect(ids).not.toEqual(expect.arrayContaining(excluded));
   });
 
-  it('requires a compatible planned parent state for accepted circle members', async () => {
-    const incompatibleStates = [
-      'draft',
-      'awaiting_confirmation',
-      'submitted',
-      'shortlisted',
-      'rejected',
-      'declined',
-      'expired',
-      'withdrawn',
-    ];
+  it('rejects stale accepted planned-circle members under every incompatible parent state', async () => {
+    const fixture = await seedPublishedPlan(t);
+    await makeViable(fixture);
     const excluded: string[] = [];
     const included: string[] = [];
     for (const state of ['invited', 'accepted']) {
@@ -142,7 +126,7 @@ describe('plan participant introduction ledger', () => {
       included.push(userId);
       await t.pool.query(`INSERT INTO circle (id, name, lead_user_id) VALUES ($1, $2, $3)`, [
         circleId,
-        `Compatible circle ${state}`,
+        `Compatible ${state}`,
         userId,
       ]);
       const applicationId = ulid();
@@ -152,19 +136,27 @@ describe('plan participant introduction ledger', () => {
         [applicationId, fixture.planId, circleId, state],
       );
       await t.pool.query(
-        `INSERT INTO application_member
-           (id, application_id, user_id, invitation_state)
+        `INSERT INTO application_member (id, application_id, user_id, invitation_state)
          VALUES ($1, $2, $3, 'accepted')`,
         [ulid(), applicationId, userId],
       );
     }
-    for (const state of incompatibleStates) {
+    for (const state of [
+      'draft',
+      'awaiting_confirmation',
+      'submitted',
+      'shortlisted',
+      'rejected',
+      'declined',
+      'expired',
+      'withdrawn',
+    ]) {
       const circleId = ulid();
       const userId = await addUser(`Stale ${state}`);
       excluded.push(userId);
       await t.pool.query(`INSERT INTO circle (id, name, lead_user_id) VALUES ($1, $2, $3)`, [
         circleId,
-        `Circle ${state}`,
+        `Stale ${state}`,
         userId,
       ]);
       const applicationId = ulid();
@@ -174,31 +166,23 @@ describe('plan participant introduction ledger', () => {
         [applicationId, fixture.planId, circleId, state],
       );
       await t.pool.query(
-        `INSERT INTO application_member
-           (id, application_id, user_id, invitation_state)
+        `INSERT INTO application_member (id, application_id, user_id, invitation_state)
          VALUES ($1, $2, $3, 'accepted')`,
         [ulid(), applicationId, userId],
       );
     }
-    await t.pool.query(
-      `UPDATE plan SET confirmed_host_count = confirmed_host_count WHERE id = $1`,
-      [fixture.planId],
-    );
-    const rows = await t.pool.query<{ user_id: string }>(
-      `SELECT user_id FROM plan_participant_introduction WHERE plan_id = $1`,
-      [fixture.planId],
-    );
-    const ids = rows.rows.map((row) => row.user_id);
+    const ids = await introducedUsers(fixture.planId);
     expect(ids).toEqual(expect.arrayContaining(included));
     expect(ids).not.toEqual(expect.arrayContaining(excluded));
   });
 
-  it('populates tonight solo and included circle applicants only after approval', async () => {
+  it('populates only approved tonight solo users and included circle members', async () => {
+    const fixture = await seedPublishedPlan(t);
+    await makeViable(fixture);
     const solo = await addUser('Tonight solo');
     const submitted = await addUser('Tonight submitted');
-    await addSoloApplication(solo, 'tonight', 'approved');
-    await addSoloApplication(submitted, 'tonight', 'submitted');
-
+    await addSoloApplication(fixture.planId, solo, 'tonight', 'approved');
+    await addSoloApplication(fixture.planId, submitted, 'tonight', 'submitted');
     const circleLead = await addUser('Tonight circle lead');
     const circleMember = await addUser('Tonight circle member');
     const circleId = ulid();
@@ -214,31 +198,21 @@ describe('plan participant introduction ledger', () => {
     );
     for (const userId of [circleLead, circleMember]) {
       await t.pool.query(
-        `INSERT INTO application_member (id, application_id, user_id)
-         VALUES ($1, $2, $3)`,
+        `INSERT INTO application_member (id, application_id, user_id) VALUES ($1, $2, $3)`,
         [ulid(), applicationId, userId],
       );
     }
-    await t.pool.query(
-      `UPDATE plan SET accepted_guest_count = accepted_guest_count WHERE id = $1`,
-      [fixture.planId],
-    );
-
-    const ids = (
-      await t.pool.query<{ user_id: string }>(
-        `SELECT user_id FROM plan_participant_introduction WHERE plan_id = $1`,
-        [fixture.planId],
-      )
-    ).rows.map((row) => row.user_id);
+    const ids = await introducedUsers(fixture.planId);
     expect(ids).toEqual(expect.arrayContaining([solo, circleLead, circleMember]));
     expect(ids).not.toContain(submitted);
   });
 
   it('rejects updates and deletes even for the bootstrap owner', async () => {
+    const fixture = await seedPublishedPlan(t);
+    await makeViable(fixture);
     await expect(
       t.pool.query(
-        `UPDATE plan_participant_introduction
-         SET introduced_at = now() WHERE plan_id = $1`,
+        `UPDATE plan_participant_introduction SET introduced_at = now() WHERE plan_id = $1`,
         [fixture.planId],
       ),
     ).rejects.toThrow(/append-only/);
@@ -249,78 +223,110 @@ describe('plan participant introduction ledger', () => {
     ).rejects.toThrow(/append-only/);
   });
 
-  it('serializes simultaneous acceptance and viability without a partial ledger', async () => {
-    const concurrent = await seedPublishedPlan(t);
-    await t.pool.query(`UPDATE plan SET open_spots = 3 WHERE id = $1`, [concurrent.planId]);
+  it('makes an application transition wait on the plan-first lock and completes the ledger', async () => {
+    const fixture = await seedPublishedPlan(t);
     const existing = await addUser('Existing confirmed guest');
-    const first = await addUser('Concurrent first');
-    const second = await addUser('Concurrent second');
-    const applicationIds = [ulid(), ulid(), ulid()];
-    await t.pool.query(
-      `INSERT INTO application (id, plan_id, solo_user_id, mode, state)
-       VALUES ($1, $4, $5, 'planned', 'accepted'),
-              ($2, $4, $6, 'planned', 'submitted'),
-              ($3, $4, $7, 'planned', 'submitted')`,
-      [
-        applicationIds[0],
-        applicationIds[1],
-        applicationIds[2],
-        concurrent.planId,
-        existing,
-        first,
-        second,
-      ],
+    const concurrent = await addUser('Concurrent accepted guest');
+    await addSoloApplication(fixture.planId, existing, 'planned', 'accepted');
+    const concurrentApplication = await addSoloApplication(
+      fixture.planId,
+      concurrent,
+      'planned',
+      'submitted',
     );
-    await t.pool.query(`UPDATE plan SET accepted_guest_count = 1 WHERE id = $1`, [
-      concurrent.planId,
-    ]);
-
-    const firstClient = await t.pool.connect();
-    const secondClient = await t.pool.connect();
+    await t.pool.query(`UPDATE plan SET accepted_guest_count = 1 WHERE id = $1`, [fixture.planId]);
+    const first = await t.pool.connect();
+    const second = await t.pool.connect();
     try {
-      await firstClient.query('BEGIN');
-      await secondClient.query('BEGIN');
-      await firstClient.query(`SELECT id FROM plan WHERE id = $1 FOR UPDATE`, [concurrent.planId]);
-      const secondLock = secondClient.query(`SELECT id FROM plan WHERE id = $1 FOR UPDATE`, [
-        concurrent.planId,
+      await first.query('BEGIN');
+      await second.query('BEGIN');
+      await first.query(`SELECT id FROM plan WHERE id = $1 FOR UPDATE`, [fixture.planId]);
+      const secondPid = (await second.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
+        .rows[0]?.pid;
+      const transition = second.query(`UPDATE application SET state = 'accepted' WHERE id = $1`, [
+        concurrentApplication,
       ]);
-
-      await firstClient.query(`UPDATE application SET state = 'accepted' WHERE id = $1`, [
-        applicationIds[1],
-      ]);
-      await firstClient.query(
-        `UPDATE plan
-         SET accepted_guest_count = accepted_guest_count + 1,
-             viable_at = COALESCE(viable_at, clock_timestamp())
-         WHERE id = $1`,
-        [concurrent.planId],
+      let waiting = false;
+      for (let attempt = 0; attempt < 100 && !waiting; attempt += 1) {
+        waiting =
+          (
+            await t.pool.query<{ waiting: boolean }>(
+              `SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1`,
+              [secondPid],
+            )
+          ).rows[0]?.waiting ?? false;
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      await first.query(
+        `UPDATE plan SET accepted_guest_count = 2, viable_at = clock_timestamp() WHERE id = $1`,
+        [fixture.planId],
       );
-      await firstClient.query('COMMIT');
-
-      await secondLock;
-      await secondClient.query(`UPDATE application SET state = 'accepted' WHERE id = $1`, [
-        applicationIds[2],
-      ]);
-      await secondClient.query(
-        `UPDATE plan SET accepted_guest_count = accepted_guest_count + 1 WHERE id = $1`,
-        [concurrent.planId],
-      );
-      await secondClient.query('COMMIT');
+      await first.query('COMMIT');
+      await transition;
+      await second.query('COMMIT');
     } catch (error) {
-      await firstClient.query('ROLLBACK');
-      await secondClient.query('ROLLBACK');
+      await first.query('ROLLBACK');
+      await second.query('ROLLBACK');
       throw error;
     } finally {
-      firstClient.release();
-      secondClient.release();
+      first.release();
+      second.release();
     }
+    expect(await introducedUsers(fixture.planId)).toEqual(
+      [fixture.hostId, existing, concurrent].sort(),
+    );
+  });
 
-    const rows = await t.pool.query<{ user_id: string }>(
-      `SELECT user_id FROM plan_participant_introduction WHERE plan_id = $1`,
-      [concurrent.planId],
+  it('rolls application state, counters, viability, and introductions back together', async () => {
+    const fixture = await seedPublishedPlan(t);
+    const first = await addUser('Rollback accepted one');
+    const second = await addUser('Rollback accepted two');
+    const firstApplication = await addSoloApplication(
+      fixture.planId,
+      first,
+      'planned',
+      'submitted',
     );
-    expect(rows.rows.map((row) => row.user_id).sort()).toEqual(
-      [concurrent.hostId, existing, first, second].sort(),
+    const secondApplication = await addSoloApplication(
+      fixture.planId,
+      second,
+      'planned',
+      'submitted',
     );
+    const client = await t.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT id FROM plan WHERE id = $1 FOR UPDATE`, [fixture.planId]);
+      await client.query(`UPDATE application SET state = 'accepted' WHERE id IN ($1, $2)`, [
+        firstApplication,
+        secondApplication,
+      ]);
+      await client.query(
+        `UPDATE plan SET accepted_guest_count = 2, viable_at = clock_timestamp() WHERE id = $1`,
+        [fixture.planId],
+      );
+      expect(
+        (
+          await client.query(`SELECT * FROM plan_participant_introduction WHERE plan_id = $1`, [
+            fixture.planId,
+          ])
+        ).rowCount,
+      ).toBe(3);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+    const applications = await t.pool.query<{ state: string }>(
+      `SELECT state FROM application WHERE id IN ($1, $2) ORDER BY id`,
+      [firstApplication, secondApplication],
+    );
+    expect(applications.rows.map((row) => row.state)).toEqual(['submitted', 'submitted']);
+    const plan = await t.pool.query<{ accepted_guest_count: number; viable_at: Date | null }>(
+      `SELECT accepted_guest_count, viable_at FROM plan WHERE id = $1`,
+      [fixture.planId],
+    );
+    expect(plan.rows[0]).toEqual({ accepted_guest_count: 0, viable_at: null });
+    expect(await introducedUsers(fixture.planId)).toEqual([]);
   });
 });
