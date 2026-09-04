@@ -107,6 +107,7 @@ The previous agent needed answers to these to reason about A2–A6 and wrote dow
 | A1. Bootstrap | **done** | — | Folder skeleton, `lib/config.ts`, TS/ESLint/Prettier/Vitest config, scripts, `.nvmrc`, `.gitignore`/`.gitattributes`, git history. `docs/` created; `modes.md`, `product.md`, `todo.md` moved in untouched. Verified on Node v24.19.0 / pnpm 9.15.4: `pnpm install`, `pnpm lint`, `pnpm typecheck`, `pnpm test` (3 pass), `pnpm dev` (Ready) all clean. `pnpm-lock.yaml` committed. |
 | A2. Schema and migrations | **done** | — | Original 13-table schema remains unchanged in `0000`/`0001`; A3's approved introduction-history correction adds the 14th table through generated `0003` plus custom `0004`. No Assembly or ThreadParticipant table. |
 | A3. Repository layer | **done** | done | Corrected actor-scoped plan/profile reads, locked append-only introduction ledger, transaction-local capability roles/GUCs, exact six-table app/admin SELECT surfaces, `NOBYPASSRLS` admin, unpublished-plan guard, host-self exemption, exact static allowlists, and an operational secret-backed deployer path through `0005`. Full verification recorded in the correction commit. |
+| A4. Audit log | in progress | agent-a4 | Append-only audit write path. Claimed; not yet implemented. |
 
 ## 10. Decisions made
 
