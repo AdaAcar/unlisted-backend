@@ -28,6 +28,7 @@ export async function withActor<TResult>(
 ): Promise<TResult> {
   const scope = actorScope(actor);
   return getAppDb().transaction(async (transaction) => {
+    await transaction.execute(sql.raw('SET LOCAL ROLE unlisted_app'));
     await transaction.execute(sql`SELECT set_config('app.actor_id', ${scope.id}, true)`);
     await transaction.execute(
       sql`SELECT set_config('app.actor_standing', ${scope.standing}, true)`,

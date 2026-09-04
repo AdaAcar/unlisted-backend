@@ -53,7 +53,7 @@ export const visibilitySpecs = {
         sql`visibility_host.user_id`,
         sql`visibility_host_user.standing`,
       );
-      return sql`NOT EXISTS (
+      const visibleToOutsider = sql`NOT EXISTS (
         SELECT 1
         FROM circle_member visibility_host
         JOIN "user" visibility_host_user ON visibility_host_user.id = visibility_host.user_id
@@ -61,6 +61,9 @@ export const visibilitySpecs = {
           AND visibility_host.status = 'active'
           AND NOT (${hostMemberVisible})
       )`;
+      return actor.kind === 'user'
+        ? sql`(app_actor_hosts_circle(scoped_plan.host_circle_id) OR ${visibleToOutsider})`
+        : visibleToOutsider;
     },
   },
   user: {

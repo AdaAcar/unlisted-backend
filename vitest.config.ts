@@ -24,6 +24,7 @@ export default defineConfig({
     // database; running test files in parallel would let them clobber each
     // other. The suite is small enough that serial files cost nothing.
     fileParallelism: false,
+    hookTimeout: 30000,
     passWithNoTests: true,
   },
 });

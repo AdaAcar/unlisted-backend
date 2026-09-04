@@ -47,7 +47,7 @@ export function getAppDb(): NodePgDatabase<typeof schema> {
   return appDatabase;
 }
 
-/** Internal BYPASSRLS connection. Import only from `db/scope/` or `db/admin/`. */
+/** Internal admin login. `db/admin` must SET LOCAL ROLE before every read. */
 export function getAdminDb(): NodePgDatabase<typeof schema> {
   if (!adminPool) {
     adminPool = new Pool({ connectionString: env.adminDatabaseUrl });

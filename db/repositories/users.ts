@@ -25,7 +25,7 @@ const selection = sql`
   scoped_user.verification_state AS "verificationState",
   scoped_user.standing AS "standing"`;
 
-function participant(userId: SQL): SQL {
+function hostParticipant(userId: SQL): SQL {
   return sql`(
     EXISTS (
       SELECT 1 FROM circle_member shared_host_member
@@ -33,7 +33,11 @@ function participant(userId: SQL): SQL {
         AND shared_host_member.user_id = ${userId}
         AND shared_host_member.status = 'active'
     )
-    OR EXISTS (
+  )`;
+}
+
+function reviewApplicant(userId: SQL): SQL {
+  return sql`EXISTS (
       SELECT 1 FROM application shared_application
       WHERE shared_application.plan_id = shared_plan.id
         AND shared_application.state <> 'withdrawn'
@@ -45,17 +49,16 @@ function participant(userId: SQL): SQL {
               AND shared_application_member.user_id = ${userId}
           )
         )
-    )
-  )`;
+    )`;
 }
 
 function sharedPlanContext(actor: Actor): SQL {
   if (actor.kind !== 'user') return sql`FALSE`;
   return sql`EXISTS (
     SELECT 1 FROM plan shared_plan
-    WHERE ${participant(sql`${actor.id}`)}
-      AND ${participant(sql`scoped_user.id`)}
-  )`;
+    WHERE (${hostParticipant(sql`${actor.id}`)} AND ${reviewApplicant(sql`scoped_user.id`)})
+       OR (${reviewApplicant(sql`${actor.id}`)} AND ${hostParticipant(sql`scoped_user.id`)})
+  ) OR app_shared_introduction_visible(scoped_user.id)`;
 }
 
 function getProfile(actor: Actor, subjectId: string): ScopedQuery<ProfileRecord | undefined> {

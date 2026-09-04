@@ -79,9 +79,14 @@ function feed(actor: Actor, filters: PlanFeedFilters): ScopedQuery<PlanRecord[]>
 }
 
 function get(actor: Actor, id: string): ScopedQuery<PlanRecord | undefined> {
+  const publication =
+    actor.kind === 'user'
+      ? sql`(scoped_plan.published_at IS NOT NULL
+             OR app_actor_hosts_circle(scoped_plan.host_circle_id))`
+      : sql`scoped_plan.published_at IS NOT NULL`;
   return scopedSelect<RawPlanRecord, PlanRecord | undefined>({
     actor,
-    businessPredicates: [sql`scoped_plan.id = ${id}`],
+    businessPredicates: [sql`scoped_plan.id = ${id}`, publication],
     decode: (rows) => (rows[0] ? decodePlan(rows[0]) : undefined),
     selection,
     spec: visibilitySpecs.plan,

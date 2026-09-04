@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -5,6 +6,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
 import * as schema from '@/db/schema';
+import { closeDb } from '@/db/client';
 
 const MIGRATIONS_FOLDER = resolve(__dirname, '../../../db/migrations');
 
@@ -30,9 +32,36 @@ export function testDatabaseUrl(): string {
 }
 
 export interface TestDb {
+  adminLoginUrl: string;
+  appLoginUrl: string;
   db: NodePgDatabase<typeof schema>;
+  deployerLoginUrl: string;
   pool: Pool;
+  postMigrationRoles: {
+    rolbypassrls: boolean;
+    rolcanlogin: boolean;
+    rolcreatedb: boolean;
+    rolcreaterole: boolean;
+    rolinherit: boolean;
+    rolname: string;
+    rolpassword: string | null;
+    rolreplication: boolean;
+    rolsuper: boolean;
+  }[];
   close: () => Promise<void>;
+}
+
+const TEST_LOGIN_ROLES = [
+  'unlisted_test_app_login',
+  'unlisted_test_admin_login',
+  'unlisted_test_deployer_login',
+] as const;
+
+function loginUrl(role: string, password: string): string {
+  const url = new URL(testDatabaseUrl());
+  url.username = role;
+  url.password = password;
+  return url.toString();
 }
 
 /**
@@ -41,7 +70,9 @@ export interface TestDb {
  * every call starts from nothing and re-runs every migration.
  */
 export async function freshDb(): Promise<TestDb> {
+  await closeDb();
   const pool = new Pool({ connectionString: testDatabaseUrl() });
+  await pool.query(`DROP ROLE IF EXISTS ${TEST_LOGIN_ROLES.join(', ')}`);
   await pool.query('DROP SCHEMA IF EXISTS public CASCADE');
   await pool.query('DROP SCHEMA IF EXISTS drizzle CASCADE');
   await pool.query('CREATE SCHEMA public');
@@ -49,5 +80,53 @@ export async function freshDb(): Promise<TestDb> {
   const db = drizzle(pool, { schema });
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
 
-  return { db, pool, close: () => pool.end() };
+  const postMigrationRoles = (
+    await pool.query<{
+      rolbypassrls: boolean;
+      rolcanlogin: boolean;
+      rolcreatedb: boolean;
+      rolcreaterole: boolean;
+      rolinherit: boolean;
+      rolname: string;
+      rolpassword: string | null;
+      rolreplication: boolean;
+      rolsuper: boolean;
+    }>(
+      `SELECT rolname, rolcanlogin, rolbypassrls, rolpassword, rolsuper,
+              rolcreatedb, rolcreaterole, rolinherit, rolreplication
+       FROM pg_authid
+       WHERE rolname IN ('unlisted_app', 'unlisted_admin', 'unlisted_migrator')
+       ORDER BY rolname`,
+    )
+  ).rows;
+
+  const password = randomBytes(18).toString('hex');
+  await pool.query(`CREATE ROLE unlisted_test_app_login LOGIN NOINHERIT PASSWORD '${password}'`);
+  await pool.query(`CREATE ROLE unlisted_test_admin_login LOGIN NOINHERIT PASSWORD '${password}'`);
+  await pool.query(
+    `CREATE ROLE unlisted_test_deployer_login LOGIN NOINHERIT PASSWORD '${password}'`,
+  );
+  await pool.query(`GRANT unlisted_app TO unlisted_test_app_login`);
+  await pool.query(`GRANT unlisted_admin TO unlisted_test_admin_login`);
+  await pool.query(`GRANT unlisted_migrator TO unlisted_test_deployer_login`);
+
+  const appLoginUrl = loginUrl('unlisted_test_app_login', password);
+  const adminLoginUrl = loginUrl('unlisted_test_admin_login', password);
+  const deployerLoginUrl = loginUrl('unlisted_test_deployer_login', password);
+  process.env.APP_DATABASE_URL = appLoginUrl;
+  process.env.ADMIN_DATABASE_URL = adminLoginUrl;
+
+  return {
+    adminLoginUrl,
+    appLoginUrl,
+    db,
+    deployerLoginUrl,
+    pool,
+    postMigrationRoles,
+    close: async () => {
+      await closeDb();
+      await pool.query(`DROP ROLE IF EXISTS ${TEST_LOGIN_ROLES.join(', ')}`);
+      await pool.end();
+    },
+  };
 }

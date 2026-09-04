@@ -21,7 +21,7 @@
               "../client",
               "../../client"
             ],
-            "message": "Raw database access is limited to db/client.ts, db/scope/, db/admin/, and the migration test harness."
+            "message": "Raw database access is limited to the exact files listed in this configuration."
           }
         ]
       }
@@ -31,11 +31,12 @@
     {
       "files": [
         "db/client.ts",
-        "db/scope/**/*.ts",
-        "db/admin/**/*.ts",
-        "tests/integration/support/**/*.ts",
-        "tests/integration/*.test.ts",
-        "drizzle.config.ts"
+        "db/scope/scoped.ts",
+        "db/scope/resolve.ts",
+        "db/admin/index.ts",
+        "tests/integration/support/db.ts",
+        "tests/integration/rls-deny-by-default.test.ts",
+        "tests/integration/repo-block-scoping.test.ts"
       ],
       "rules": { "no-restricted-imports": "off" }
     }

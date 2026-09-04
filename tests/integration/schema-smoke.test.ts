@@ -34,6 +34,7 @@ describe('migrations', () => {
         'message',
         'message_thread',
         'plan',
+        'plan_participant_introduction',
         'record',
         'signal',
         'user',
@@ -46,7 +47,34 @@ describe('migrations', () => {
     const { rows } = await t.pool.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`,
     );
-    expect(rows[0]?.n).toBe(3);
+    expect(rows[0]?.n).toBe(5);
+  });
+
+  it('installs the viable-plan introduction ledger as append-only', async () => {
+    const constraints = await t.pool.query<{ conname: string }>(
+      `SELECT conname FROM pg_constraint
+       WHERE conrelid = 'plan_participant_introduction'::regclass
+       ORDER BY conname`,
+    );
+    expect(constraints.rows.map((row) => row.conname)).toEqual(
+      expect.arrayContaining([
+        'plan_participant_introduction_id_ulid_chk',
+        'plan_participant_introduction_plan_user_uq',
+        'plan_participant_introduction_plan_viable_fk',
+        'plan_participant_introduction_user_id_user_id_fk',
+      ]),
+    );
+
+    const triggers = await t.pool.query<{ tgname: string }>(
+      `SELECT tgname FROM pg_trigger
+       WHERE NOT tgisinternal
+         AND tgrelid = 'plan_participant_introduction'::regclass
+       ORDER BY tgname`,
+    );
+    expect(triggers.rows.map((row) => row.tgname)).toEqual([
+      'plan_participant_introduction_no_delete',
+      'plan_participant_introduction_no_update',
+    ]);
   });
 
   it('installs the generated columns and the guard triggers', async () => {

@@ -31,12 +31,12 @@ export const env = {
     return parsePostgresUrl('DATABASE_URL', true);
   },
 
-  /** RLS-subject application role used by every actor-scoped repository call. */
+  /** Secret-backed login that assumes unlisted_app inside each transaction. */
   get appDatabaseUrl(): string {
     return parsePostgresUrl('APP_DATABASE_URL', true);
   },
 
-  /** BYPASSRLS role used only by the explicitly named `db/admin` surface. */
+  /** Secret-backed login that assumes unlisted_admin inside each transaction. */
   get adminDatabaseUrl(): string {
     return parsePostgresUrl('ADMIN_DATABASE_URL', true);
   },

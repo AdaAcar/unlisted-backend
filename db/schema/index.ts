@@ -11,6 +11,7 @@ export * from './circle';
 export * from './circleMember';
 export * from './venue';
 export * from './plan';
+export * from './planParticipantIntroduction';
 export * from './application';
 export * from './applicationMember';
 export * from './messageThread';
