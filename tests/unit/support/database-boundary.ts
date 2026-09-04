@@ -13,6 +13,7 @@ export const DATABASE_SOURCE_EXTENSIONS = new Set([
 
 export const TRUSTED_DATABASE_FILES = new Set([
   'db/admin/index.ts',
+  'db/audit.ts',
   'db/client.ts',
   'db/migrate.mjs',
   'db/scope/resolve.ts',
@@ -22,7 +23,14 @@ export const TRUSTED_DATABASE_FILES = new Set([
 const MODULE_SPECIFIER =
   /\b(?:import|export)\s+(?:[^'";]*?\s+from\s*)?['"]([^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)|\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
 const RAW_ACQUISITION = /\b(?:getPool|getDb|getAppDb|getAdminDb|withAdmin|adminDb)\b/;
-const RAW_EXECUTION = /\.\s*(?:query|connect|select|execute|transaction)\s*\(|\.\s*\$client\b/;
+// insert/update/delete cover Drizzle's query-builder write methods (A4 added
+// audit_log's write path, the first writer in db/). This also matches
+// unrelated `Set`/`Map` method calls (`.delete(`, e.g.) — a false positive,
+// not a false negative. No current db/ file uses those; if one starts to and
+// trips this scan, add it to TRUSTED_DATABASE_FILES deliberately rather than
+// loosening the regex back to a read-only shape.
+const RAW_EXECUTION =
+  /\.\s*(?:query|connect|select|execute|transaction|insert|update|delete)\s*\(|\.\s*\$client\b/;
 
 function extension(path: string): string {
   const match = path.match(/(\.[^.\/]+)$/);

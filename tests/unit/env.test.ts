@@ -34,4 +34,22 @@ describe('environment parsing', () => {
     expect(env.appDatabaseUrl).toContain('app');
     expect(env.adminDatabaseUrl).toContain('admin');
   });
+
+  it('reports a missing audit hash secret clearly', async () => {
+    delete process.env.AUDIT_HASH_SECRET;
+    const { env } = await import('@/lib/env');
+    expect(() => env.auditHashSecret).toThrow(/AUDIT_HASH_SECRET/);
+  });
+
+  it('rejects an audit hash secret shorter than 32 bytes', async () => {
+    process.env.AUDIT_HASH_SECRET = 'too-short';
+    const { env } = await import('@/lib/env');
+    expect(() => env.auditHashSecret).toThrow(/AUDIT_HASH_SECRET/);
+  });
+
+  it('accepts a 32-byte-or-longer audit hash secret', async () => {
+    process.env.AUDIT_HASH_SECRET = 'x'.repeat(32);
+    const { env } = await import('@/lib/env');
+    expect(env.auditHashSecret).toBe('x'.repeat(32));
+  });
 });

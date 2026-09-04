@@ -250,7 +250,7 @@ describe('RLS deny by default', () => {
     expect(functions.rows).toHaveLength(14);
   });
 
-  it('grants app and admin exactly the six-table SELECT surface and no mutations', async () => {
+  it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, and no other mutations', async () => {
     const privileges = await t.pool.query<{
       canDelete: boolean;
       canInsert: boolean;
@@ -283,9 +283,14 @@ describe('RLS deny by default', () => {
       'plan',
       'user',
     ]);
+    // audit_log INSERT is the one deliberate exception (0006_audit_append.sql,
+    // A4): unlisted_app only, INSERT only, no SELECT — the app writes audit
+    // rows and can never read them back. unlisted_admin gets nothing on
+    // audit_log at all.
     for (const row of privileges.rows) {
+      const isAppAuditInsert = row.grantee === 'unlisted_app' && row.tableName === 'audit_log';
       expect(row.canSelect).toBe(allowed.has(row.tableName));
-      expect(row.canInsert).toBe(false);
+      expect(row.canInsert).toBe(isAppAuditInsert);
       expect(row.canUpdate).toBe(false);
       expect(row.canDelete).toBe(false);
       expect(row.canTruncate).toBe(false);
@@ -307,17 +312,21 @@ describe('RLS deny by default', () => {
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the one audit_log append policy', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
        ORDER BY tablename`,
     );
-    expect(policies.rows).toEqual(
-      ['application', 'application_member', 'block', 'circle_member', 'plan', 'user'].map(
-        (tablename) => ({ cmd: 'SELECT', tablename }),
-      ),
-    );
+    expect(policies.rows).toEqual([
+      { cmd: 'SELECT', tablename: 'application' },
+      { cmd: 'SELECT', tablename: 'application_member' },
+      { cmd: 'INSERT', tablename: 'audit_log' },
+      { cmd: 'SELECT', tablename: 'block' },
+      { cmd: 'SELECT', tablename: 'circle_member' },
+      { cmd: 'SELECT', tablename: 'plan' },
+      { cmd: 'SELECT', tablename: 'user' },
+    ]);
   });
 
   it('returns zero rows to the app role when the actor GUC is unset', async () => {

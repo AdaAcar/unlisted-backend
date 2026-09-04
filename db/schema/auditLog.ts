@@ -14,9 +14,11 @@ import { user } from './user';
  * worker actions.
  *
  * Append-only is enforced in 0001_guards.sql by a trigger that rejects UPDATE
- * and DELETE. A GRANT/REVOKE for the application role is deferred to A3 (no such
- * role exists yet) — see docs/state.md section 11. The write-path helper the domain
- * layer calls is A4.
+ * and DELETE. The unlisted_app role has INSERT-only privilege here, restored
+ * narrowly by 0006_audit_append.sql after A3's blanket revocation in
+ * 0004_a3_corrections.sql — see docs/state.md. No SELECT grant: the app writes
+ * audit rows and can never read them back. The write-path helper the domain
+ * layer calls is `db/audit.ts` (A4).
  */
 export const auditLog = pgTable(
   'audit_log',

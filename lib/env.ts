@@ -25,6 +25,34 @@ function parsePostgresUrl(name: string, required: boolean): string | undefined {
   return result.data;
 }
 
+/**
+ * HMAC key for `lib/hash.ts`, which hashes IP addresses and user agents
+ * before an audit entry reaches `db/`. Minimum length guards against a
+ * plausible-looking placeholder (`changeme`) silently producing hashes that
+ * are technically keyed but trivially guessable.
+ */
+const AUDIT_HASH_SECRET_MIN_BYTES = 32;
+
+const auditHashSecret = z
+  .string()
+  .refine((value) => Buffer.byteLength(value, 'utf8') >= AUDIT_HASH_SECRET_MIN_BYTES, {
+    message: `must be at least ${AUDIT_HASH_SECRET_MIN_BYTES} bytes`,
+  });
+
+function parseAuditHashSecret(): string {
+  const raw = process.env.AUDIT_HASH_SECRET;
+  if (raw === undefined || raw.trim() === '') {
+    throw new Error('Missing required environment variable: AUDIT_HASH_SECRET');
+  }
+
+  const result = auditHashSecret.safeParse(raw);
+  if (!result.success) {
+    const detail = result.error.issues.map((issue) => issue.message).join('; ');
+    throw new Error(`Invalid environment variable AUDIT_HASH_SECRET: ${detail}`);
+  }
+  return result.data;
+}
+
 export const env = {
   /** Primary database connection string. Required at runtime. */
   get databaseUrl(): string {
@@ -47,5 +75,16 @@ export const env = {
    */
   get testDatabaseUrl(): string | undefined {
     return parsePostgresUrl('TEST_DATABASE_URL', false);
+  },
+
+  /**
+   * HMAC key used to hash IP addresses and user agents before an audit entry
+   * reaches `db/` (see `lib/hash.ts`). Required, and fails closed: a missing
+   * or too-short secret makes audit writes throw rather than produce a
+   * reversible or trivially guessable hash. Rotating this key breaks
+   * correlation with historical rows — do not rotate expecting continuity.
+   */
+  get auditHashSecret(): string {
+    return parseAuditHashSecret();
   },
 };

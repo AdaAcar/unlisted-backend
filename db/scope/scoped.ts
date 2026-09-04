@@ -8,7 +8,12 @@ import type { Actor } from './actor';
 import { applyVisibility, type ScopedSelectDefinition, type VisibilitySpec } from './visibility';
 
 type AppDatabase = ReturnType<typeof getAppDb>;
-type ActorTransaction = Parameters<Parameters<AppDatabase['transaction']>[0]>[0];
+/**
+ * The executor handle `withActor` hands its callback. Exported so `db/audit.ts`
+ * can accept an already-open actor transaction as a parameter instead of
+ * opening its own — see `withActor`'s doc comment.
+ */
+export type ActorTransaction = Parameters<Parameters<AppDatabase['transaction']>[0]>[0];
 
 export interface ScopedQuery<TResult> extends PromiseLike<TResult> {
   execute: () => Promise<TResult>;

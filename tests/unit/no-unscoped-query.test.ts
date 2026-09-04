@@ -36,6 +36,9 @@ describe('database scoping chokepoint', () => {
     ['select', `await value.select().from(table);`],
     ['execute', `await value.execute(statement);`],
     ['transaction', `await value.transaction(run);`],
+    ['insert', `await value.insert(table).values(row);`],
+    ['update', `await value.update(table).set(row);`],
+    ['delete', `await value.delete(table);`],
     ['$client', `export const leaked = value.$client;`],
   ])('rejects adversarial %s samples', (_name, source) => {
     expect(databaseBoundaryViolations('db/new-module.ts', source)).not.toEqual([]);

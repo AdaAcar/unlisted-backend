@@ -43,6 +43,13 @@
       "when": 1788532622489,
       "tag": "0005_migration_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788535748336,
+      "tag": "0006_audit_append",
+      "breakpoints": true
     }
   ]
 }

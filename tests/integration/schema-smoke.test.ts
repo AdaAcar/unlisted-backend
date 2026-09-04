@@ -43,11 +43,11 @@ describe('migrations', () => {
     );
   });
 
-  it('records the complete bootstrap stack through 0005', async () => {
+  it('records the complete bootstrap stack through 0006', async () => {
     const { rows } = await t.pool.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`,
     );
-    expect(rows[0]?.n).toBe(6);
+    expect(rows[0]?.n).toBe(7);
   });
 
   it('hands the Drizzle ledger boundary to the migrator capability only', async () => {
