@@ -33,3 +33,6 @@ pnpm-debug.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# local tooling state (not part of the repo)
+.semgrep/
