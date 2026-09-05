@@ -250,7 +250,7 @@ describe('RLS deny by default', () => {
     expect(functions.rows).toHaveLength(14);
   });
 
-  it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT and the session grants (B1), and no other mutations', async () => {
+  it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, the session grants (B1), and the verification column grants (B2), and no other mutations', async () => {
     const privileges = await t.pool.query<{
       canDelete: boolean;
       canInsert: boolean;
@@ -281,7 +281,6 @@ describe('RLS deny by default', () => {
       'block',
       'circle_member',
       'plan',
-      'user',
     ]);
     // audit_log INSERT (0006_audit_append.sql, A4) and the session table's
     // SELECT/INSERT/DELETE (0007_session.sql, B1) are the deliberate
@@ -289,14 +288,27 @@ describe('RLS deny by default', () => {
     // unlisted_app-only, INSERT-only, no SELECT — the app writes audit rows
     // and can never read them back. session is unlisted_app SELECT+INSERT+
     // DELETE (no UPDATE; see 0007's comment) and unlisted_admin SELECT-only
-    // (the pre-authentication token lookup). Neither role gets anything else
-    // on either table.
+    // (the pre-authentication token lookup).
+    //
+    // "user" is its own case, deliberately not in `allowed`: 0008_verification.sql
+    // (B2) revoked the table-wide SELECT grant both roles held and replaced
+    // it with an explicit column list that omits identity_hash and
+    // verification_ref (unlisted_app keeps verification_ref, needed for the
+    // webhook's WHERE clause). `has_table_privilege` only sees table-wide
+    // grants, not column-level ones — since neither role holds a table-wide
+    // SELECT on "user" anymore, `has_table_privilege(..., 'SELECT')` is
+    // correctly false for both here even though most columns remain
+    // selectable; the dedicated column-privilege test below is what proves
+    // the actual column-level shape. Likewise unlisted_app's column-scoped
+    // UPDATE (exactly verification_state/age/identity_hash/verification_ref)
+    // doesn't register as table-wide `canUpdate` either.
     for (const row of privileges.rows) {
       const isAppAuditInsert = row.grantee === 'unlisted_app' && row.tableName === 'audit_log';
       const isSession = row.tableName === 'session';
       const isAppSessionRW = row.grantee === 'unlisted_app' && isSession;
+      const isUser = row.tableName === 'user';
 
-      expect(row.canSelect).toBe(allowed.has(row.tableName) || isSession);
+      expect(row.canSelect).toBe(isUser ? false : allowed.has(row.tableName) || isSession);
       expect(row.canInsert).toBe(isAppAuditInsert || isAppSessionRW);
       expect(row.canUpdate).toBe(false);
       expect(row.canDelete).toBe(isAppSessionRW);
@@ -304,6 +316,50 @@ describe('RLS deny by default', () => {
       expect(row.canReferences).toBe(false);
       expect(row.canTrigger).toBe(false);
     }
+  });
+
+  it('column-scopes the verification write to exactly four columns, and denies identity_hash/verification_ref SELECT except the one WHERE-clause exception (B2)', async () => {
+    const deniedChecks: [
+      role: 'unlisted_app' | 'unlisted_admin',
+      column: string,
+      privilege: 'SELECT' | 'UPDATE',
+    ][] = [
+      ['unlisted_app', 'identity_hash', 'SELECT'],
+      ['unlisted_admin', 'identity_hash', 'SELECT'],
+      ['unlisted_admin', 'verification_ref', 'SELECT'],
+      ['unlisted_admin', 'verification_state', 'UPDATE'],
+      ['unlisted_admin', 'age', 'UPDATE'],
+      ['unlisted_admin', 'identity_hash', 'UPDATE'],
+      ['unlisted_admin', 'verification_ref', 'UPDATE'],
+    ];
+    for (const [role, column, privilege] of deniedChecks) {
+      const result = await t.pool.query<{ has: boolean }>(
+        `SELECT has_column_privilege($1, 'public."user"', $2, $3) AS has`,
+        [role, column, privilege],
+      );
+      expect(result.rows[0]?.has, `${role} ${privilege} ${column}`).toBe(false);
+    }
+
+    const grantedChecks: [string, 'SELECT' | 'UPDATE'][] = [
+      ['verification_ref', 'SELECT'],
+      ['verification_state', 'UPDATE'],
+      ['age', 'UPDATE'],
+      ['identity_hash', 'UPDATE'],
+      ['verification_ref', 'UPDATE'],
+    ];
+    for (const [column, privilege] of grantedChecks) {
+      const result = await t.pool.query<{ has: boolean }>(
+        `SELECT has_column_privilege('unlisted_app', 'public."user"', $1, $2) AS has`,
+        [column, privilege],
+      );
+      expect(result.rows[0]?.has, `unlisted_app ${privilege} ${column}`).toBe(true);
+    }
+
+    // Nobody ever gets UPDATE on an ordinary column through this grant.
+    const firstNameUpdate = await t.pool.query<{ has: boolean }>(
+      `SELECT has_column_privilege('unlisted_app', 'public."user"', 'first_name', 'UPDATE') AS has`,
+    );
+    expect(firstNameUpdate.rows[0]?.has).toBe(false);
   });
 
   it('gives admin exactly seven forced-RLS cross-actor SELECT policies', async () => {
@@ -325,7 +381,7 @@ describe('RLS deny by default', () => {
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy and the session policies (B1)', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), and the verification write policy (B2)', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
@@ -342,6 +398,7 @@ describe('RLS deny by default', () => {
       { cmd: 'INSERT', tablename: 'session' },
       { cmd: 'SELECT', tablename: 'session' },
       { cmd: 'SELECT', tablename: 'user' },
+      { cmd: 'UPDATE', tablename: 'user' },
     ]);
   });
 

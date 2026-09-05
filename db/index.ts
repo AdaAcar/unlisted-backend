@@ -27,3 +27,8 @@ export {
   SESSION_COOKIE_NAME,
 } from './scope/resolve';
 export { createSession, deleteSessionByTokenHash, rotateSession } from './session';
+export {
+  completeVerification,
+  startVerification,
+  type CompleteVerificationParams,
+} from './verification';

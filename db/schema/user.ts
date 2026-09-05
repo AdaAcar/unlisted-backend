@@ -42,5 +42,9 @@ export const user = pgTable(
     // Ban durability: a re-verified identity cannot open a second account.
     // Nullable, so unverified users do not collide on NULL.
     uniqueIndex('user_identity_hash_uq').on(t.identityHash),
+    // A vendor session ref is single-use and looked up by exact match (B2,
+    // db/verification.ts) — the unique index is what makes that lookup
+    // guaranteed to match at most one row, not just "probably".
+    uniqueIndex('user_verification_ref_uq').on(t.verificationRef),
   ],
 );

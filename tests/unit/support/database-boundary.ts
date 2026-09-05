@@ -19,6 +19,7 @@ export const TRUSTED_DATABASE_FILES = new Set([
   'db/scope/resolve.ts',
   'db/scope/scoped.ts',
   'db/session.ts',
+  'db/verification.ts',
 ]);
 
 const MODULE_SPECIFIER =

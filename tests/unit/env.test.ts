@@ -52,4 +52,54 @@ describe('environment parsing', () => {
     const { env } = await import('@/lib/env');
     expect(env.auditHashSecret).toBe('x'.repeat(32));
   });
+
+  it('reports a missing identity hash secret clearly', async () => {
+    delete process.env.IDENTITY_HASH_SECRET;
+    const { env } = await import('@/lib/env');
+    expect(() => env.identityHashSecret).toThrow(/IDENTITY_HASH_SECRET/);
+  });
+
+  it('rejects an identity hash secret shorter than 32 bytes', async () => {
+    process.env.IDENTITY_HASH_SECRET = 'too-short';
+    const { env } = await import('@/lib/env');
+    expect(() => env.identityHashSecret).toThrow(/IDENTITY_HASH_SECRET/);
+  });
+
+  it('accepts a 32-byte-or-longer identity hash secret, distinct from the audit secret', async () => {
+    process.env.IDENTITY_HASH_SECRET = 'y'.repeat(32);
+    process.env.AUDIT_HASH_SECRET = 'x'.repeat(32);
+    const { env } = await import('@/lib/env');
+    expect(env.identityHashSecret).toBe('y'.repeat(32));
+    expect(env.identityHashSecret).not.toBe(env.auditHashSecret);
+  });
+
+  it('reports a missing verification webhook secret clearly', async () => {
+    delete process.env.VERIFICATION_WEBHOOK_SECRET;
+    const { env } = await import('@/lib/env');
+    expect(() => env.verificationWebhookSecret).toThrow(/VERIFICATION_WEBHOOK_SECRET/);
+  });
+
+  it('rejects a verification webhook secret shorter than 32 bytes', async () => {
+    process.env.VERIFICATION_WEBHOOK_SECRET = 'too-short';
+    const { env } = await import('@/lib/env');
+    expect(() => env.verificationWebhookSecret).toThrow(/VERIFICATION_WEBHOOK_SECRET/);
+  });
+
+  it('defaults the verification vendor to stub when unset', async () => {
+    delete process.env.VERIFICATION_VENDOR;
+    const { env } = await import('@/lib/env');
+    expect(env.verificationVendor).toBe('stub');
+  });
+
+  it('accepts an explicit stub verification vendor', async () => {
+    process.env.VERIFICATION_VENDOR = 'stub';
+    const { env } = await import('@/lib/env');
+    expect(env.verificationVendor).toBe('stub');
+  });
+
+  it('rejects an unrecognized verification vendor', async () => {
+    process.env.VERIFICATION_VENDOR = 'realvendor';
+    const { env } = await import('@/lib/env');
+    expect(() => env.verificationVendor).toThrow(/VERIFICATION_VENDOR/);
+  });
 });

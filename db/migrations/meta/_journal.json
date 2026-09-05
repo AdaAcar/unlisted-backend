@@ -57,6 +57,13 @@
       "when": 1788604058291,
       "tag": "0007_session",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788607082236,
+      "tag": "0008_verification",
+      "breakpoints": true
     }
   ]
 }

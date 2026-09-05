@@ -53,6 +53,79 @@ function parseAuditHashSecret(): string {
   return result.data;
 }
 
+/**
+ * HMAC key for `lib/identityHash.ts`. Deliberately a separate secret from
+ * `AUDIT_HASH_SECRET`: different purpose (ban-durability identity matching,
+ * not audit-metadata hashing) and different rotation cost (rotating this one
+ * breaks ban durability for every already-hashed identity, not audit
+ * correlation), so tying them together would couple two unrelated
+ * operational decisions to one key.
+ */
+const IDENTITY_HASH_SECRET_MIN_BYTES = 32;
+
+const identityHashSecret = z
+  .string()
+  .refine((value) => Buffer.byteLength(value, 'utf8') >= IDENTITY_HASH_SECRET_MIN_BYTES, {
+    message: `must be at least ${IDENTITY_HASH_SECRET_MIN_BYTES} bytes`,
+  });
+
+function parseIdentityHashSecret(): string {
+  const raw = process.env.IDENTITY_HASH_SECRET;
+  if (raw === undefined || raw.trim() === '') {
+    throw new Error('Missing required environment variable: IDENTITY_HASH_SECRET');
+  }
+
+  const result = identityHashSecret.safeParse(raw);
+  if (!result.success) {
+    const detail = result.error.issues.map((issue) => issue.message).join('; ');
+    throw new Error(`Invalid environment variable IDENTITY_HASH_SECRET: ${detail}`);
+  }
+  return result.data;
+}
+
+/** HMAC key `lib/verificationVendor.ts`'s stub uses to sign/verify webhook bodies. */
+const VERIFICATION_WEBHOOK_SECRET_MIN_BYTES = 32;
+
+const verificationWebhookSecret = z
+  .string()
+  .refine((value) => Buffer.byteLength(value, 'utf8') >= VERIFICATION_WEBHOOK_SECRET_MIN_BYTES, {
+    message: `must be at least ${VERIFICATION_WEBHOOK_SECRET_MIN_BYTES} bytes`,
+  });
+
+function parseVerificationWebhookSecret(): string {
+  const raw = process.env.VERIFICATION_WEBHOOK_SECRET;
+  if (raw === undefined || raw.trim() === '') {
+    throw new Error('Missing required environment variable: VERIFICATION_WEBHOOK_SECRET');
+  }
+
+  const result = verificationWebhookSecret.safeParse(raw);
+  if (!result.success) {
+    const detail = result.error.issues.map((issue) => issue.message).join('; ');
+    throw new Error(`Invalid environment variable VERIFICATION_WEBHOOK_SECRET: ${detail}`);
+  }
+  return result.data;
+}
+
+const VERIFICATION_VENDORS = ['stub'] as const;
+export type VerificationVendorName = (typeof VERIFICATION_VENDORS)[number];
+
+/**
+ * Feature flag selecting the verification vendor implementation
+ * (todo_agent.md B2). Lives here, not in `lib/config.ts`: it is read from
+ * the environment, and `config` never reads the environment by decision
+ * (see `lib/config.ts`'s doc comment). Defaults to 'stub' when unset — the
+ * stub is correct for now (todo_agent.md), and no real vendor exists yet for
+ * any other value to mean.
+ */
+function parseVerificationVendor(): VerificationVendorName {
+  const raw = process.env.VERIFICATION_VENDOR;
+  if (raw === undefined || raw.trim() === '') return 'stub';
+  if ((VERIFICATION_VENDORS as readonly string[]).includes(raw)) {
+    return raw as VerificationVendorName;
+  }
+  throw new Error(`Invalid environment variable VERIFICATION_VENDOR: unrecognized vendor "${raw}"`);
+}
+
 export const env = {
   /** Primary database connection string. Required at runtime. */
   get databaseUrl(): string {
@@ -86,5 +159,30 @@ export const env = {
    */
   get auditHashSecret(): string {
     return parseAuditHashSecret();
+  },
+
+  /**
+   * HMAC key used to hash a verification vendor's asserted identity
+   * reference before it becomes `user.identity_hash` (see
+   * `lib/identityHash.ts`). Required, fails closed the same way
+   * `auditHashSecret` does. Rotating this key breaks ban-durability
+   * correlation for every already-hashed identity — do not rotate expecting
+   * continuity.
+   */
+  get identityHashSecret(): string {
+    return parseIdentityHashSecret();
+  },
+
+  /**
+   * HMAC key the stub verification vendor (`lib/verificationVendor.ts`) uses
+   * to sign and verify webhook request bodies. Required, fails closed.
+   */
+  get verificationWebhookSecret(): string {
+    return parseVerificationWebhookSecret();
+  },
+
+  /** Feature flag selecting the verification vendor. Defaults to 'stub'. */
+  get verificationVendor(): VerificationVendorName {
+    return parseVerificationVendor();
   },
 };
