@@ -1,12 +1,15 @@
 /**
  * Application data-layer entry point: actor-scoped repositories, plus the
- * append-only audit write helper (A4). `recordAuditEntry` takes the caller's
- * open transaction rather than a fresh connection — see `db/audit.ts` — so it
- * is exported on its own, not wrapped in a repository shape. `withActor`
- * itself is deliberately not re-exported here: the domain layer that will
- * call this (A6+) must not import from `db/` at all (agent-rules section 4),
- * so composing an executor and calling this helper happens at the `app/api`
- * boundary, not inside `domain/`.
+ * append-only audit write helper (A4) and the session write path (B1).
+ * `recordAuditEntry` and the session functions all take the caller's open
+ * transaction rather than a fresh connection — see `db/audit.ts` and
+ * `db/session.ts` — so a session write and its audit entry commit or roll
+ * back together. `withActor` itself is deliberately not re-exported here:
+ * the domain layer that will call this (A6+) must not import from `db/` at
+ * all (agent-rules section 4), so composing an executor and calling these
+ * helpers happens at the `app/api` boundary (importing `withActor` directly
+ * from `@/db/scope/scoped`, same as `db/audit.ts`'s tests already do), not
+ * inside `domain/`.
  */
 export {
   recordAuditEntry,
@@ -15,3 +18,12 @@ export {
   type UserAuditEntry,
 } from './audit';
 export { plans, users } from './repositories';
+export {
+  authenticate,
+  extractSessionToken,
+  getSessionActor,
+  getSessionContext,
+  loadActorByUserId,
+  SESSION_COOKIE_NAME,
+} from './scope/resolve';
+export { createSession, deleteSessionByTokenHash, rotateSession } from './session';

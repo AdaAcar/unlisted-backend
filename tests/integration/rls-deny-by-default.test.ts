@@ -48,7 +48,7 @@ describe('RLS deny by default', () => {
        WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'
        ORDER BY relname`,
     );
-    expect(result.rows).toHaveLength(14);
+    expect(result.rows).toHaveLength(15);
     expect(result.rows.every((row) => row.relrowsecurity && row.relforcerowsecurity)).toBe(true);
   });
 
@@ -250,7 +250,7 @@ describe('RLS deny by default', () => {
     expect(functions.rows).toHaveLength(14);
   });
 
-  it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, and no other mutations', async () => {
+  it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT and the session grants (B1), and no other mutations', async () => {
     const privileges = await t.pool.query<{
       canDelete: boolean;
       canInsert: boolean;
@@ -283,40 +283,53 @@ describe('RLS deny by default', () => {
       'plan',
       'user',
     ]);
-    // audit_log INSERT is the one deliberate exception (0006_audit_append.sql,
-    // A4): unlisted_app only, INSERT only, no SELECT — the app writes audit
-    // rows and can never read them back. unlisted_admin gets nothing on
-    // audit_log at all.
+    // audit_log INSERT (0006_audit_append.sql, A4) and the session table's
+    // SELECT/INSERT/DELETE (0007_session.sql, B1) are the deliberate
+    // exceptions beyond the six-table read surface: audit_log is
+    // unlisted_app-only, INSERT-only, no SELECT — the app writes audit rows
+    // and can never read them back. session is unlisted_app SELECT+INSERT+
+    // DELETE (no UPDATE; see 0007's comment) and unlisted_admin SELECT-only
+    // (the pre-authentication token lookup). Neither role gets anything else
+    // on either table.
     for (const row of privileges.rows) {
       const isAppAuditInsert = row.grantee === 'unlisted_app' && row.tableName === 'audit_log';
-      expect(row.canSelect).toBe(allowed.has(row.tableName));
-      expect(row.canInsert).toBe(isAppAuditInsert);
+      const isSession = row.tableName === 'session';
+      const isAppSessionRW = row.grantee === 'unlisted_app' && isSession;
+
+      expect(row.canSelect).toBe(allowed.has(row.tableName) || isSession);
+      expect(row.canInsert).toBe(isAppAuditInsert || isAppSessionRW);
       expect(row.canUpdate).toBe(false);
-      expect(row.canDelete).toBe(false);
+      expect(row.canDelete).toBe(isAppSessionRW);
       expect(row.canTruncate).toBe(false);
       expect(row.canReferences).toBe(false);
       expect(row.canTrigger).toBe(false);
     }
   });
 
-  it('gives admin exactly six forced-RLS cross-actor SELECT policies', async () => {
+  it('gives admin exactly seven forced-RLS cross-actor SELECT policies', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_admin' = ANY(roles)
        ORDER BY tablename`,
     );
     expect(policies.rows).toEqual(
-      ['application', 'application_member', 'block', 'circle_member', 'plan', 'user'].map(
-        (tablename) => ({ cmd: 'SELECT', tablename }),
-      ),
+      [
+        'application',
+        'application_member',
+        'block',
+        'circle_member',
+        'plan',
+        'session',
+        'user',
+      ].map((tablename) => ({ cmd: 'SELECT', tablename })),
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies, plus the one audit_log append policy', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy and the session policies (B1)', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
-       ORDER BY tablename`,
+       ORDER BY tablename, cmd`,
     );
     expect(policies.rows).toEqual([
       { cmd: 'SELECT', tablename: 'application' },
@@ -325,6 +338,9 @@ describe('RLS deny by default', () => {
       { cmd: 'SELECT', tablename: 'block' },
       { cmd: 'SELECT', tablename: 'circle_member' },
       { cmd: 'SELECT', tablename: 'plan' },
+      { cmd: 'DELETE', tablename: 'session' },
+      { cmd: 'INSERT', tablename: 'session' },
+      { cmd: 'SELECT', tablename: 'session' },
       { cmd: 'SELECT', tablename: 'user' },
     ]);
   });

@@ -27,9 +27,11 @@ describe('audit append migration boundaries', () => {
     const journal = JSON.parse(readFileSync(resolve(migrations, 'meta/_journal.json'), 'utf8')) as {
       entries: { idx: number; tag: string }[];
     };
-    const last = journal.entries[journal.entries.length - 1];
-    expect(last?.idx).toBe(6);
-    expect(last?.tag).toBe('0006_audit_append');
+    // 0006 itself must still be exactly where it was recorded, regardless of
+    // migrations added after it (B1's 0007) — that is the actual "frozen"
+    // guarantee this test protects, not "0006 is the last entry forever".
+    const auditEntry = journal.entries.find((entry) => entry.idx === 6);
+    expect(auditEntry?.tag).toBe('0006_audit_append');
   });
 
   it('installs a WITH CHECK that ties actor_id to the transaction GUC in both directions', () => {

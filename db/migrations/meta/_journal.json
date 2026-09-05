@@ -50,6 +50,13 @@
       "when": 1788535748336,
       "tag": "0006_audit_append",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788604058291,
+      "tag": "0007_session",
+      "breakpoints": true
     }
   ]
 }

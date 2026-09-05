@@ -19,3 +19,4 @@ export * from './message';
 export * from './signal';
 export * from './block';
 export * from './auditLog';
+export * from './session';

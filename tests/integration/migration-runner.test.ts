@@ -58,7 +58,7 @@ afterAll(async () => {
 });
 
 describe('transaction-local migration capability activation', () => {
-  it('lets the one-shot bootstrap runner execute and record all of 0006', async () => {
+  it('lets the one-shot bootstrap runner execute and record all of 0007', async () => {
     const state = await t.pool.query<{ n: number; schema_owner: string; table_owner: string }>(
       `SELECT
          (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS n,
@@ -70,13 +70,13 @@ describe('transaction-local migration capability activation', () => {
        WHERE n.nspname = 'drizzle'`,
     );
     expect(state.rows).toEqual([
-      { n: 7, schema_owner: 'unlisted_migrator', table_owner: 'unlisted_migrator' },
+      { n: 8, schema_owner: 'unlisted_migrator', table_owner: 'unlisted_migrator' },
     ]);
   });
 
   it('denies the NOINHERIT deployer before role activation, then records and owns a future migration', async () => {
     const migrations = isolatedFutureMigration(
-      '0007_future_probe',
+      '0008_future_probe',
       'CREATE TABLE public.a3_future_migration_probe (id integer PRIMARY KEY);\n',
     );
 
@@ -92,7 +92,7 @@ describe('transaction-local migration capability activation', () => {
       `SELECT to_regclass('public.a3_future_migration_probe')::text AS table_name`,
     );
     expect(before.rows[0]?.table_name).toBeNull();
-    expect((await t.pool.query(`SELECT * FROM drizzle.__drizzle_migrations`)).rowCount).toBe(7);
+    expect((await t.pool.query(`SELECT * FROM drizzle.__drizzle_migrations`)).rowCount).toBe(8);
 
     await invokeRunner(migrations);
 
@@ -103,12 +103,12 @@ describe('transaction-local migration capability activation', () => {
        FROM pg_class c
        WHERE c.oid = 'public.a3_future_migration_probe'::regclass`,
     );
-    expect(applied.rows).toEqual([{ n: 8, owner: 'unlisted_migrator' }]);
+    expect(applied.rows).toEqual([{ n: 9, owner: 'unlisted_migrator' }]);
   });
 
   it('permanently closes its dedicated connection when a migration fails', async () => {
     const migrations = isolatedFutureMigration(
-      '0007_broken_probe',
+      '0008_broken_probe',
       'CREATE TABLE public.a3_broken_probe (id integer);\nTHIS IS NOT SQL;\n',
     );
 

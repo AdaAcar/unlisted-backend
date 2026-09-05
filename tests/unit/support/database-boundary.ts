@@ -18,6 +18,7 @@ export const TRUSTED_DATABASE_FILES = new Set([
   'db/migrate.mjs',
   'db/scope/resolve.ts',
   'db/scope/scoped.ts',
+  'db/session.ts',
 ]);
 
 const MODULE_SPECIFIER =
