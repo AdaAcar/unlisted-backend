@@ -6,7 +6,9 @@
  * entity must not change any response without a deliberate edit here.
  *
  * C1 adds the first real view model (`CircleView`), C2 the second
- * (`VenueView`). The full per-audience set arrives in phase F.
+ * (`VenueView`), C3 the third (`PlanView`). The full per-audience set arrives
+ * in phase F.
  */
 export { toCircleView, type CircleView } from './circles';
+export { toPlanView, type PlanView } from './plans';
 export { toVenueView, type VenueView } from './venues';

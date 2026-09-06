@@ -74,7 +74,13 @@ export const plan = pgTable(
     check('plan_open_spots_nonneg_chk', sql`${t.openSpots} >= 0`),
     check('plan_min_group_size_chk', sql`${t.minGroupSize} >= 1`),
     check('plan_ends_after_starts_chk', sql`${t.endsAt} IS NULL OR ${t.endsAt} > ${t.startsAt}`),
-    check('plan_mode_set_after_draft_chk', sql`${t.state} = 'draft' OR ${t.mode} IS NOT NULL`),
+    // Relaxed by 0011_plan_write.sql: a plan cancelled before it was ever
+    // published legitimately has no `mode` (docs/state.md Decisions C3). Every
+    // other non-draft state is only reachable via publish, which sets `mode`.
+    check(
+      'plan_mode_set_after_draft_chk',
+      sql`${t.state} IN ('draft', 'cancelled') OR ${t.mode} IS NOT NULL`,
+    ),
     check('plan_confirmed_host_nonneg_chk', sql`${t.confirmedHostCount} >= 0`),
     check('plan_accepted_guest_nonneg_chk', sql`${t.acceptedGuestCount} >= 0`),
     check('plan_held_nonneg_chk', sql`${t.heldCount} >= 0`),

@@ -117,8 +117,41 @@ describe('RLS deny by default', () => {
       await attempt(`INSERT INTO "user" (id, first_name) VALUES ($1, 'No')`, [
         '00000000000000000000000000',
       ]);
-      await attempt(`UPDATE plan SET note = 'tampered' WHERE id = $1`, [fixture.planId]);
+      // C3 (0011) gave unlisted_app a column-scoped plan UPDATE, but only on
+      // the lifecycle columns — host_circle_id and the guest counters are not
+      // in the grant, so a raw attempt to move a plan's host or its accepted
+      // count is still a hard privilege error, and DELETE is ungranted too.
+      await attempt(`UPDATE plan SET host_circle_id = $1 WHERE id = $2`, [
+        fixture.circleId,
+        fixture.planId,
+      ]);
+      await attempt(`UPDATE plan SET accepted_guest_count = 99 WHERE id = $1`, [fixture.planId]);
       await attempt(`DELETE FROM plan WHERE id = $1`, [fixture.planId]);
+      expect(
+        (await t.pool.query(`SELECT note FROM plan WHERE id = $1`, [fixture.planId])).rows[0],
+      ).toEqual({ note: null });
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('lets the app role touch a granted plan column only through the lead RLS policy (0011)', async () => {
+    const pool = new Pool({ connectionString: appLoginUrl });
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SET LOCAL ROLE unlisted_app');
+        // fixture.actorId is a plain user, not the host circle's lead.
+        await client.query(`SELECT set_config('app.actor_id', $1, true)`, [fixture.actorId]);
+        const res = await client.query(`UPDATE plan SET note = 'tampered' WHERE id = $1`, [
+          fixture.planId,
+        ]);
+        expect(res.rowCount).toBe(0); // plan_app_update USING app_actor_leads_circle -> no row
+        await client.query('ROLLBACK');
+      } finally {
+        client.release();
+      }
       expect(
         (await t.pool.query(`SELECT note FROM plan WHERE id = $1`, [fixture.planId])).rows[0],
       ).toEqual({ note: null });
@@ -197,6 +230,7 @@ describe('RLS deny by default', () => {
            'app_application_visible',
            'app_actor_hosts_circle',
            'app_actor_leads_circle',
+           'app_active_host_member_count',
            'reconcile_plan_participant_introductions',
            'reconcile_introductions_from_plan',
            'reconcile_introductions_from_application',
@@ -216,6 +250,7 @@ describe('RLS deny by default', () => {
       'app_application_visible(counterparty_application_id character varying)',
       'app_actor_hosts_circle(counterparty_circle_id character varying)',
       'app_actor_leads_circle(counterparty_circle_id character varying)',
+      'app_active_host_member_count(counterparty_circle_id character varying)',
       'app_shared_introduction_visible(subject_user_id character varying)',
     ]);
     const adminFunctions = new Set([
@@ -227,6 +262,7 @@ describe('RLS deny by default', () => {
       'app_application_visible(counterparty_application_id character varying)',
       'app_actor_hosts_circle(counterparty_circle_id character varying)',
       'app_actor_leads_circle(counterparty_circle_id character varying)',
+      'app_active_host_member_count(counterparty_circle_id character varying)',
     ]);
     const populationFunctions = new Set([
       'reconcile_plan_participant_introductions(target_plan_id character varying, introduction_time timestamp with time zone)',
@@ -250,7 +286,7 @@ describe('RLS deny by default', () => {
         expect(row.adminCanExecute).toBe(false);
       }
     }
-    expect(functions.rows).toHaveLength(15);
+    expect(functions.rows).toHaveLength(16);
   });
 
   it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, the session grants (B1), the verification column grants (B2), and the app-only circle read + circle/circle_member write grants (C1), and no other mutations', async () => {
@@ -327,12 +363,21 @@ describe('RLS deny by default', () => {
       const isApp = row.grantee === 'unlisted_app';
       const isAppCircle = isApp && row.tableName === 'circle';
       const isAppCircleMemberInsert = isApp && row.tableName === 'circle_member';
+      // C3 (0011): unlisted_app alone gets a table-wide INSERT on `plan`
+      // (draft creation) and a column-scoped UPDATE (the lifecycle columns —
+      // host_circle_id and the guest counters excluded), which — like the B2 /
+      // C1 column-scoped grants — does not register as table-wide `canUpdate`.
+      const isAppPlanInsert = isApp && row.tableName === 'plan';
 
       expect(row.canSelect).toBe(
         isColumnScopedSelect ? false : allowed.has(row.tableName) || isSession || isAppCircle,
       );
       expect(row.canInsert).toBe(
-        isAppAuditInsert || isAppSessionRW || isAppCircle || isAppCircleMemberInsert,
+        isAppAuditInsert ||
+          isAppSessionRW ||
+          isAppCircle ||
+          isAppCircleMemberInsert ||
+          isAppPlanInsert,
       );
       expect(row.canUpdate).toBe(false);
       expect(row.canDelete).toBe(isAppSessionRW);
@@ -405,7 +450,7 @@ describe('RLS deny by default', () => {
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), the circle / circle_member read+write policies (C1), and the venue read policy (C2)', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), the circle / circle_member read+write policies (C1), the venue read policy (C2), and the plan write policies (C3)', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
@@ -425,7 +470,11 @@ describe('RLS deny by default', () => {
       { cmd: 'SELECT', tablename: 'circle_member' },
       { cmd: 'SELECT', tablename: 'circle_member' },
       { cmd: 'UPDATE', tablename: 'circle_member' },
+      // 0004's `plan_app_read` plus 0011's `plan_app_insert` / `plan_app_update`
+      // (C3 — draft creation and lifecycle writes, lead-gated).
+      { cmd: 'INSERT', tablename: 'plan' },
       { cmd: 'SELECT', tablename: 'plan' },
+      { cmd: 'UPDATE', tablename: 'plan' },
       { cmd: 'DELETE', tablename: 'session' },
       { cmd: 'INSERT', tablename: 'session' },
       { cmd: 'SELECT', tablename: 'session' },

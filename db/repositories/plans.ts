@@ -18,31 +18,47 @@ export interface PlanRecord {
   hostCircleId: string;
   venueId: string;
   startsAt: Date;
+  endsAt: Date | null;
   openSpots: number;
+  minGroupSize: number;
+  note: string | null;
   district: string;
   venueType: VenueType;
   state: 'draft' | 'published' | 'applications_closed' | 'completed' | 'cancelled';
   mode: 'planned' | 'tonight' | null;
   viableAt: Date | null;
+  applicationsClosedAt: Date | null;
+  cancellationKind: 'host' | 'non_viable' | null;
   confirmedHostCount: number;
   acceptedGuestCount: number;
   heldCount: number;
 }
 
-type RawPlanRecord = Omit<PlanRecord, 'startsAt' | 'viableAt'> & {
+type RawPlanRecord = Omit<
+  PlanRecord,
+  'startsAt' | 'endsAt' | 'viableAt' | 'applicationsClosedAt'
+> & {
   startsAt: Date | string;
+  endsAt: Date | string | null;
   viableAt: Date | string | null;
+  applicationsClosedAt: Date | string | null;
 };
 
 function timestamp(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
 }
 
+function nullableTimestamp(value: Date | string | null): Date | null {
+  return value === null ? null : timestamp(value);
+}
+
 function decodePlan(row: RawPlanRecord): PlanRecord {
   return {
     ...row,
     startsAt: timestamp(row.startsAt),
-    viableAt: row.viableAt === null ? null : timestamp(row.viableAt),
+    endsAt: nullableTimestamp(row.endsAt),
+    viableAt: nullableTimestamp(row.viableAt),
+    applicationsClosedAt: nullableTimestamp(row.applicationsClosedAt),
   };
 }
 
@@ -51,12 +67,17 @@ const selection = sql`
   scoped_plan.host_circle_id AS "hostCircleId",
   scoped_plan.venue_id AS "venueId",
   scoped_plan.starts_at AS "startsAt",
+  scoped_plan.ends_at AS "endsAt",
   scoped_plan.open_spots AS "openSpots",
+  scoped_plan.min_group_size AS "minGroupSize",
+  scoped_plan.note AS "note",
   scoped_plan.district AS "district",
   scoped_plan.venue_type AS "venueType",
   scoped_plan.state AS "state",
   scoped_plan.mode AS "mode",
   scoped_plan.viable_at AS "viableAt",
+  scoped_plan.applications_closed_at AS "applicationsClosedAt",
+  scoped_plan.cancellation_kind AS "cancellationKind",
   scoped_plan.confirmed_host_count AS "confirmedHostCount",
   scoped_plan.accepted_guest_count AS "acceptedGuestCount",
   scoped_plan.held_count AS "heldCount"`;

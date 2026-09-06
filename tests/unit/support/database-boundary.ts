@@ -15,6 +15,7 @@ export const TRUSTED_DATABASE_FILES = new Set([
   'db/admin/index.ts',
   'db/audit.ts',
   'db/circles.ts',
+  'db/plans.ts',
   'db/client.ts',
   'db/migrate.mjs',
   // A read repository that deliberately does not use `scopedSelect` — venues

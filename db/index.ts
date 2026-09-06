@@ -41,6 +41,26 @@ export {
   type TransferLeadResult,
 } from './circles';
 export {
+  activeHostMemberCount,
+  cancelPlan,
+  closePlanApplications,
+  closePlanAtStartsAt,
+  completePlan,
+  createDraftPlan,
+  editPlan,
+  lockPlan,
+  publishPlan,
+  type CancelOutcome,
+  type CloseOutcome,
+  type CompleteOutcome,
+  type CreatePlanInput,
+  type CreatePlanOutcome,
+  type EditPlanFields,
+  type EditPlanOutcome,
+  type LockedPlan,
+  type PublishOutcome,
+} from './plans';
+export {
   authenticate,
   extractSessionToken,
   getSessionActor,
