@@ -26,6 +26,7 @@ export type {
 export {
   ACTION_ENDPOINTS,
   ASSEMBLY_ENDPOINTS,
+  INFERRED_ENDPOINTS,
   MODE_ONLY_ENDPOINTS,
   MODE_SCOPED_ACTIONS,
 } from './actions';

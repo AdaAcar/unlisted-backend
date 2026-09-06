@@ -4,6 +4,7 @@ import type { Actor, UserActor } from '@/db/scope/actor';
 import {
   ACTION_ENDPOINTS,
   ASSEMBLY_ENDPOINTS,
+  INFERRED_ENDPOINTS,
   MODE_ONLY_ENDPOINTS,
   MODE_SCOPED_ACTIONS,
   policy,
@@ -114,10 +115,16 @@ describe('policy table completeness', () => {
     'DELETE /assemblies/:id/leave',
   ] as const;
 
-  it('derives to exactly 47 actions: 45 from api.md plus 2 modes.md-only additions', () => {
+  // Endpoints neither doc lists. C1 added the invitee's own acceptance of a
+  // circle invitation (docs/api.md states "Invitee must accept" as a rule on
+  // the lead-only invite row, with no endpoint of its own).
+  const INFERRED_GROUND_TRUTH = ['POST /circles/:id/members/accept'] as const;
+
+  it('derives to exactly 48 actions: 45 from api.md, 2 modes.md-only, 1 inferred (C1)', () => {
     expect(API_ENDPOINTS).toHaveLength(45);
     expect(MODE_ONLY_GROUND_TRUTH).toHaveLength(2);
-    expect(Object.keys(ACTION_ENDPOINTS)).toHaveLength(47);
+    expect(INFERRED_GROUND_TRUTH).toHaveLength(1);
+    expect(Object.keys(ACTION_ENDPOINTS)).toHaveLength(48);
   });
 
   it('has a rule for every non-Assembly docs/api.md endpoint (direction 1: nothing missing)', () => {
@@ -127,8 +134,12 @@ describe('policy table completeness', () => {
     }
   });
 
-  it('maps every rule to a named api.md endpoint or a named modes.md-only action (direction 2: nothing invented)', () => {
-    const known = new Set<string>([...API_ENDPOINTS, ...MODE_ONLY_GROUND_TRUTH]);
+  it('maps every rule to a named api.md endpoint, a named modes.md-only action, or a named inferred endpoint (direction 2: nothing invented)', () => {
+    const known = new Set<string>([
+      ...API_ENDPOINTS,
+      ...MODE_ONLY_GROUND_TRUTH,
+      ...INFERRED_GROUND_TRUTH,
+    ]);
     for (const endpoint of Object.values(ACTION_ENDPOINTS)) {
       expect(known.has(endpoint)).toBe(true);
     }
@@ -136,6 +147,10 @@ describe('policy table completeness', () => {
 
   it('exports MODE_ONLY_ENDPOINTS matching exactly the two modes.md additions', () => {
     expect(new Set(MODE_ONLY_ENDPOINTS)).toEqual(new Set(MODE_ONLY_GROUND_TRUTH));
+  });
+
+  it('exports INFERRED_ENDPOINTS matching exactly the one C1 addition', () => {
+    expect(new Set(INFERRED_ENDPOINTS)).toEqual(new Set(INFERRED_GROUND_TRUTH));
   });
 
   it('names Assembly endpoints explicitly and excludes every one of them from the rule table', () => {
@@ -275,6 +290,22 @@ describe('policy: circles', () => {
   });
   it('circle.transferLead denies a plain member', () => {
     expect(policy(HOST, 'circle.transferLead', { actorRole: 'member' })).toBe('deny');
+  });
+
+  it('circle.acceptInvitation allows an invited user', () => {
+    expect(policy(HOST, 'circle.acceptInvitation', { membershipStatus: 'invited' })).toBe('allow');
+  });
+  it('circle.acceptInvitation denies an already-active member', () => {
+    expect(policy(HOST, 'circle.acceptInvitation', { membershipStatus: 'active' })).toBe('deny');
+  });
+  it('circle.acceptInvitation denies a removed member', () => {
+    expect(policy(HOST, 'circle.acceptInvitation', { membershipStatus: 'removed' })).toBe('deny');
+  });
+  it('circle.acceptInvitation denies a user with no membership row', () => {
+    expect(policy(HOST, 'circle.acceptInvitation', { membershipStatus: null })).toBe('deny');
+  });
+  it('circle.acceptInvitation denies an unauthenticated caller', () => {
+    expect(policy(ANON, 'circle.acceptInvitation', { membershipStatus: 'invited' })).toBe('deny');
   });
 });
 

@@ -14,6 +14,7 @@ export const DATABASE_SOURCE_EXTENSIONS = new Set([
 export const TRUSTED_DATABASE_FILES = new Set([
   'db/admin/index.ts',
   'db/audit.ts',
+  'db/circles.ts',
   'db/client.ts',
   'db/migrate.mjs',
   'db/scope/resolve.ts',

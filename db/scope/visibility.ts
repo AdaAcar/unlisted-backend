@@ -72,6 +72,37 @@ export const visibilitySpecs = {
       return directUserPredicate(actor, sql`scoped_user.id`, sql`scoped_user.standing`);
     },
   },
+  /**
+   * A circle is visible only to its active members (C1). This mirrors
+   * migration 0009's `circle_app_read` policy exactly — both gate on
+   * `app_actor_hosts_circle(id)` — so a non-member cannot tell "circle
+   * exists, I am not in it" from "no such circle" and the route returns 404.
+   * Nothing reads circles as a system actor.
+   */
+  circle: {
+    from: sql`circle scoped_circle`,
+    predicate(actor: Actor): SQL {
+      return actor.kind === 'user' ? sql`app_actor_hosts_circle(scoped_circle.id)` : sql`FALSE`;
+    },
+  },
+  /**
+   * A `circle_member` row is reachable when the counterparty user (the row's
+   * subject) is visible to the actor under the usual block + enforcement
+   * rules. Used for the actor's own membership lookup (always their own row,
+   * so this is a no-op there) and reusable for co-member reads.
+   */
+  circleMember: {
+    from: sql`circle_member scoped_circle_member
+      JOIN "user" scoped_circle_member_user
+        ON scoped_circle_member_user.id = scoped_circle_member.user_id`,
+    predicate(actor: Actor): SQL {
+      return directUserPredicate(
+        actor,
+        sql`scoped_circle_member.user_id`,
+        sql`scoped_circle_member_user.standing`,
+      );
+    },
+  },
 } satisfies Record<string, VisibilitySpec>;
 
 /** Compose visibility into a scoped select definition before SQL is executed. */

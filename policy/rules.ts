@@ -47,6 +47,8 @@ export const rules: RuleTable = {
     isUser(actor) &&
     (resource.actorRole === 'lead' || (resource.targetIsSelf && resource.actorRole !== null)),
   'circle.transferLead': (actor, resource) => isUser(actor) && resource.actorRole === 'lead',
+  'circle.acceptInvitation': (actor, resource) =>
+    isUser(actor) && resource.membershipStatus === 'invited',
 
   'venue.list': (actor) => isUser(actor),
   'venue.get': (actor) => isUser(actor),

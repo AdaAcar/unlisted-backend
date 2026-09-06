@@ -17,7 +17,18 @@ export {
   type SystemAuditEntry,
   type UserAuditEntry,
 } from './audit';
-export { plans, users } from './repositories';
+export { circles, plans, users } from './repositories';
+export {
+  acceptCircleInvitation,
+  createCircle,
+  inviteMember,
+  removeCircleMember,
+  transferCircleLead,
+  type CreatedCircle,
+  type InviteMemberResult,
+  type RemoveMemberResult,
+  type TransferLeadResult,
+} from './circles';
 export {
   authenticate,
   extractSessionToken,

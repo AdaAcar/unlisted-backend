@@ -9,8 +9,14 @@ import { user } from './user';
  * its own record. Membership changes are logged (see `circle_member`).
  *
  * `lead_user_id` should always correspond to a `circle_member` row with
- * `role = 'lead'` and `status = 'active'`; that cross-row consistency is a domain
- * invariant, not a database constraint (see docs/state.md section 11).
+ * `role = 'lead'` and `status = 'active'`. "At most one active lead per circle"
+ * is enforced declaratively by the `circle_one_active_lead` partial unique
+ * index (migration 0009); that it is *the same* user as `lead_user_id`, and
+ * that there is always exactly one, is kept true by the C1 write layer
+ * (`db/circles.ts`) under a row lock. Authorization never reads
+ * `lead_user_id` — the lead check (`app_actor_leads_circle`) reads
+ * `circle_member` — so drift here is a display bug, not a privilege one.
+ * See docs/state.md Decisions (C1).
  */
 export const circle = pgTable(
   'circle',

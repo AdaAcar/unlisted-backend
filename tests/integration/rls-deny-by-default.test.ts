@@ -196,6 +196,7 @@ describe('RLS deny by default', () => {
            'app_plan_visible',
            'app_application_visible',
            'app_actor_hosts_circle',
+           'app_actor_leads_circle',
            'reconcile_plan_participant_introductions',
            'reconcile_introductions_from_plan',
            'reconcile_introductions_from_application',
@@ -214,6 +215,7 @@ describe('RLS deny by default', () => {
       'app_plan_visible(counterparty_plan_id character varying)',
       'app_application_visible(counterparty_application_id character varying)',
       'app_actor_hosts_circle(counterparty_circle_id character varying)',
+      'app_actor_leads_circle(counterparty_circle_id character varying)',
       'app_shared_introduction_visible(subject_user_id character varying)',
     ]);
     const adminFunctions = new Set([
@@ -224,6 +226,7 @@ describe('RLS deny by default', () => {
       'app_plan_visible(counterparty_plan_id character varying)',
       'app_application_visible(counterparty_application_id character varying)',
       'app_actor_hosts_circle(counterparty_circle_id character varying)',
+      'app_actor_leads_circle(counterparty_circle_id character varying)',
     ]);
     const populationFunctions = new Set([
       'reconcile_plan_participant_introductions(target_plan_id character varying, introduction_time timestamp with time zone)',
@@ -247,10 +250,10 @@ describe('RLS deny by default', () => {
         expect(row.adminCanExecute).toBe(false);
       }
     }
-    expect(functions.rows).toHaveLength(14);
+    expect(functions.rows).toHaveLength(15);
   });
 
-  it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, the session grants (B1), and the verification column grants (B2), and no other mutations', async () => {
+  it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, the session grants (B1), the verification column grants (B2), and the app-only circle read + circle/circle_member write grants (C1), and no other mutations', async () => {
     const privileges = await t.pool.query<{
       canDelete: boolean;
       canInsert: boolean;
@@ -302,14 +305,29 @@ describe('RLS deny by default', () => {
     // the actual column-level shape. Likewise unlisted_app's column-scoped
     // UPDATE (exactly verification_state/age/identity_hash/verification_ref)
     // doesn't register as table-wide `canUpdate` either.
+    //
+    // C1 (0009_circle_access.sql): unlisted_app alone gets SELECT + INSERT on
+    // `circle` (members-only read, creation) and INSERT on `circle_member`
+    // (invite / the creator's own lead row); its UPDATE on both is
+    // column-scoped (circle.lead_user_id; circle_member.role/status/
+    // joined_at/removed_at), so — like B2's verification UPDATE — it does not
+    // register as table-wide `canUpdate`. unlisted_admin gets nothing new:
+    // no admin path needs `circle`.
     for (const row of privileges.rows) {
       const isAppAuditInsert = row.grantee === 'unlisted_app' && row.tableName === 'audit_log';
       const isSession = row.tableName === 'session';
       const isAppSessionRW = row.grantee === 'unlisted_app' && isSession;
       const isUser = row.tableName === 'user';
+      const isApp = row.grantee === 'unlisted_app';
+      const isAppCircle = isApp && row.tableName === 'circle';
+      const isAppCircleMemberInsert = isApp && row.tableName === 'circle_member';
 
-      expect(row.canSelect).toBe(isUser ? false : allowed.has(row.tableName) || isSession);
-      expect(row.canInsert).toBe(isAppAuditInsert || isAppSessionRW);
+      expect(row.canSelect).toBe(
+        isUser ? false : allowed.has(row.tableName) || isSession || isAppCircle,
+      );
+      expect(row.canInsert).toBe(
+        isAppAuditInsert || isAppSessionRW || isAppCircle || isAppCircleMemberInsert,
+      );
       expect(row.canUpdate).toBe(false);
       expect(row.canDelete).toBe(isAppSessionRW);
       expect(row.canTruncate).toBe(false);
@@ -381,7 +399,7 @@ describe('RLS deny by default', () => {
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), and the verification write policy (B2)', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), and the circle / circle_member read+write policies (C1)', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
@@ -392,7 +410,15 @@ describe('RLS deny by default', () => {
       { cmd: 'SELECT', tablename: 'application_member' },
       { cmd: 'INSERT', tablename: 'audit_log' },
       { cmd: 'SELECT', tablename: 'block' },
+      { cmd: 'INSERT', tablename: 'circle' },
+      { cmd: 'SELECT', tablename: 'circle' },
+      { cmd: 'UPDATE', tablename: 'circle' },
+      { cmd: 'INSERT', tablename: 'circle_member' },
+      // 0004's `circle_member_app_read` plus 0009's additive
+      // `circle_member_app_roster_read` (per-member roster view).
       { cmd: 'SELECT', tablename: 'circle_member' },
+      { cmd: 'SELECT', tablename: 'circle_member' },
+      { cmd: 'UPDATE', tablename: 'circle_member' },
       { cmd: 'SELECT', tablename: 'plan' },
       { cmd: 'DELETE', tablename: 'session' },
       { cmd: 'INSERT', tablename: 'session' },

@@ -21,9 +21,11 @@ export type PlanMode = 'planned' | 'tonight';
 /**
  * One entry per action this module governs: every non-Assembly endpoint in
  * docs/api.md, plus the two docs/modes.md-only additions (`approve`,
- * `close`) that docs/api.md predates and never lists. See
- * `ACTION_ENDPOINTS` below for the exact crosswalk and docs/state.md
- * Decisions (A5) for the 45 + 2 = 47 derivation.
+ * `close`) that docs/api.md predates and never lists, plus one inferred
+ * endpoint neither doc lists (`circle.acceptInvitation`, added in C1 — see
+ * `INFERRED_ENDPOINTS`). See `ACTION_ENDPOINTS` below for the exact
+ * crosswalk and docs/state.md Decisions (A5, C1) for the 45 + 2 + 1 = 48
+ * derivation.
  *
  * Every resource shape here is a set of facts the *caller* already knows --
  * role, membership, mode, ownership, a shared-plan-context boolean. Policy
@@ -53,6 +55,7 @@ export interface ResourceByAction {
   'circle.addMember': { actorRole: CircleRole | null };
   'circle.removeMember': { actorRole: CircleRole | null; targetIsSelf: boolean };
   'circle.transferLead': { actorRole: CircleRole | null };
+  'circle.acceptInvitation': { membershipStatus: CircleMemberStatus | null };
 
   'venue.list': Record<string, never>;
   'venue.get': Record<string, never>;
@@ -133,6 +136,7 @@ export const ACTION_ENDPOINTS: Record<Action, string> = {
   'circle.addMember': 'POST /circles/:id/members',
   'circle.removeMember': 'DELETE /circles/:id/members/:userId',
   'circle.transferLead': 'POST /circles/:id/lead',
+  'circle.acceptInvitation': 'POST /circles/:id/members/accept',
 
   'venue.list': 'GET /venues',
   'venue.get': 'GET /venues/:id',
@@ -192,6 +196,16 @@ export const MODE_ONLY_ENDPOINTS = [
   'POST /applications/:id/approve',
   'POST /plans/:id/close',
 ] as const;
+
+/**
+ * Endpoints this codebase adds that neither docs/api.md nor docs/modes.md
+ * lists. C1: the invitee accepting a circle invitation is their own action,
+ * but docs/api.md's Circles section states "Invitee must accept" only as a
+ * rule on the lead-only `POST /circles/:id/members` row and gives it no
+ * endpoint of its own. Named here, not smuggled in, so the completeness
+ * test still checks both directions. See docs/state.md Decisions (C1).
+ */
+export const INFERRED_ENDPOINTS = ['POST /circles/:id/members/accept'] as const;
 
 /** Actions whose rule reads `resource.planMode`; the wrong mode always denies. */
 export const MODE_SCOPED_ACTIONS: readonly Action[] = [
