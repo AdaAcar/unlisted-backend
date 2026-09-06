@@ -60,3 +60,41 @@ export function toPlanView(plan: PlanRecord): PlanView {
     cancellationKind: plan.cancellationKind,
   };
 }
+
+/**
+ * The discovery-feed row (C4) — leaner than `PlanView`, because the feed is the
+ * codebase's most exposed scrape target (docs/security.md: enumeration is the
+ * top threat, keep attendee lists out of the feed). Deliberately dropped
+ * relative to `PlanView`: `hostCircleId` (a circle handle a stranger has no use
+ * for — `GET /circles/:id` is members-only anyway), `state` (always `published`
+ * here), and every attendance-derived field including `viable` (a searcher sees
+ * a plan as pending, never who is in it). Venue name/address are not here
+ * either — the client resolves `venueId` through the public venue registry.
+ */
+export interface PlanFeedView {
+  id: string;
+  venueId: string;
+  district: string;
+  venueType: PlanRecord['venueType'];
+  startsAt: string;
+  endsAt: string | null;
+  openSpots: number;
+  minGroupSize: number;
+  note: string | null;
+  mode: PlanRecord['mode'];
+}
+
+export function toPlanFeedView(plan: PlanRecord): PlanFeedView {
+  return {
+    id: plan.id,
+    venueId: plan.venueId,
+    district: plan.district,
+    venueType: plan.venueType,
+    startsAt: plan.startsAt.toISOString(),
+    endsAt: plan.endsAt === null ? null : plan.endsAt.toISOString(),
+    openSpots: plan.openSpots,
+    minGroupSize: plan.minGroupSize,
+    note: plan.note,
+    mode: plan.mode,
+  };
+}

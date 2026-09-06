@@ -6,15 +6,19 @@ import {
   activeHostMemberCount,
   circles,
   createDraftPlan,
+  FEED_PAGE_DEFAULT,
+  FEED_PAGE_MAX,
   getSessionActor,
   getVenue,
   plans,
   recordAuditEntry,
+  VENUE_TYPES,
+  type FeedCursor,
 } from '@/db';
 import { withActor } from '@/db/scope/scoped';
 import { auditMeta } from '@/lib/requestMeta';
 import { policy } from '@/policy';
-import { toPlanView } from '@/views';
+import { toPlanFeedView, toPlanView } from '@/views';
 
 /**
  * `POST /plans` (docs/api.md Plans): session + verified + standing=good, host
@@ -116,4 +120,100 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }
   return NextResponse.json(toPlanView(record), { status: 201 });
+}
+
+/**
+ * `GET /plans` (docs/api.md Plans; docs/security.md enumeration): the discovery
+ * feed. Wired to the A3 `plans.feed`, which already composes the block and
+ * enforcement predicates into the SQL via `applyVisibility` — this route adds
+ * nothing to that path, it only validates input and paginates.
+ *
+ * Enumeration defences (docs/security.md: the plan feed is the top scrape
+ * target and revealing where someone will be is the worst failure mode):
+ *
+ * - `district` is required — a scraper must enumerate districts (coarse, few)
+ *   rather than pull the whole set in one call, and it matches product.md's
+ *   per-district "liquidity density".
+ * - Keyset pagination over `(starts_at, id)` with an opaque, Zod-validated
+ *   cursor and a hard page cap. No `OFFSET` (arbitrary jumps), no total count
+ *   (a count leaks the size of the filtered-out set).
+ * - The feed row (`PlanFeedView`) carries plan facts only: no attendee ids, no
+ *   host member list, no attendance counts.
+ * - Only `published` plans (the `plans.feed` predicate); a plan whose
+ *   applications have closed has left `published` (C3 closure) and drops out.
+ *
+ * Rate limiting is D5 (Redis not installed) — recorded as a known gap.
+ */
+const feedQuery = z.object({
+  district: z.string().trim().min(1),
+  dateFrom: z.string().datetime().optional(),
+  dateTo: z.string().datetime().optional(),
+  venueType: z.enum(VENUE_TYPES).optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().positive().optional(),
+});
+
+const cursorPayload = z.object({
+  i: z.string().refine(isUlid, 'must be a valid ulid'),
+});
+
+function decodeCursor(raw: string): FeedCursor | null {
+  try {
+    const json = Buffer.from(raw, 'base64url').toString('utf8');
+    const parsed = cursorPayload.safeParse(JSON.parse(json));
+    return parsed.success ? { id: parsed.data.i } : null;
+  } catch {
+    return null;
+  }
+}
+
+function encodeCursor(id: string): string {
+  return Buffer.from(JSON.stringify({ i: id }), 'utf8').toString('base64url');
+}
+
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const parsed = feedQuery.safeParse({
+    district: request.nextUrl.searchParams.get('district') ?? undefined,
+    dateFrom: request.nextUrl.searchParams.get('dateFrom') ?? undefined,
+    dateTo: request.nextUrl.searchParams.get('dateTo') ?? undefined,
+    venueType: request.nextUrl.searchParams.get('venueType') ?? undefined,
+    cursor: request.nextUrl.searchParams.get('cursor') ?? undefined,
+    limit: request.nextUrl.searchParams.get('limit') ?? undefined,
+  });
+  if (!parsed.success) {
+    return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
+  }
+  const query = parsed.data;
+
+  let cursor: FeedCursor | undefined;
+  if (query.cursor !== undefined) {
+    const decoded = decodeCursor(query.cursor);
+    if (!decoded) {
+      return NextResponse.json({ error: 'invalid_cursor' }, { status: 400 });
+    }
+    cursor = decoded;
+  }
+
+  const actor = await getSessionActor(request);
+  if (!actor) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+  if (policy(actor, 'plan.list', {}) !== 'allow') {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+
+  const limit = Math.min(FEED_PAGE_MAX, query.limit ?? FEED_PAGE_DEFAULT);
+  const rows = await plans.feed(actor, {
+    district: query.district,
+    startsAfter: query.dateFrom === undefined ? undefined : new Date(query.dateFrom),
+    startsBefore: query.dateTo === undefined ? undefined : new Date(query.dateTo),
+    venueType: query.venueType,
+    cursor,
+    limit,
+  });
+
+  const last = rows.at(-1);
+  const nextCursor = rows.length === limit && last ? encodeCursor(last.id) : null;
+
+  return NextResponse.json({ plans: rows.map(toPlanFeedView), nextCursor }, { status: 200 });
 }

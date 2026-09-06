@@ -1,5 +1,11 @@
 export { circles } from './circles';
-export { plans } from './plans';
+export {
+  plans,
+  FEED_PAGE_DEFAULT,
+  FEED_PAGE_MAX,
+  type FeedCursor,
+  type PlanFeedFilters,
+} from './plans';
 export { users } from './users';
 export {
   getVenue,

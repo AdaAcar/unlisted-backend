@@ -4,11 +4,34 @@ import type { Actor } from '@/db/scope/actor';
 import { scopedSelect, type ScopedQuery } from '@/db/scope/scoped';
 import { visibilitySpecs } from '@/db/scope/visibility';
 
+/**
+ * Discovery pagination bounds (C4). Not in `lib/config.ts`: those are the
+ * agent-rules section-5 product parameters, pinned by `bootstrap.test.ts` — a
+ * page cap is an API/enumeration knob, so it lives with its caller, the same
+ * way B1 kept `SESSION_TTL_SECONDS` out of config.
+ */
+export const FEED_PAGE_DEFAULT = 25;
+export const FEED_PAGE_MAX = 50;
+
+/**
+ * Keyset position over the feed's stable `(starts_at, id)` order. Just the plan
+ * id: `feed` resolves the row's `(starts_at, id)` pair with a subquery against
+ * the DB's own stored value, so the boundary is exact — no sub-millisecond
+ * truncation from round-tripping a timestamp through JSON, which would let a
+ * client re-see the row it just paged past.
+ */
+export interface FeedCursor {
+  id: string;
+}
+
 export interface PlanFeedFilters {
   district?: string;
   startsAfter?: Date;
   startsBefore?: Date;
   venueType?: VenueType;
+  cursor?: FeedCursor;
+  /** Clamped to [1, FEED_PAGE_MAX]; defaults to FEED_PAGE_DEFAULT. */
+  limit?: number;
 }
 
 type VenueType = 'bar' | 'restaurant' | 'club' | 'beach' | 'cafe';
@@ -82,12 +105,29 @@ const selection = sql`
   scoped_plan.accepted_guest_count AS "acceptedGuestCount",
   scoped_plan.held_count AS "heldCount"`;
 
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit)) return FEED_PAGE_DEFAULT;
+  return Math.min(FEED_PAGE_MAX, Math.max(1, Math.trunc(limit)));
+}
+
 function feed(actor: Actor, filters: PlanFeedFilters): ScopedQuery<PlanRecord[]> {
   const predicates: SQL[] = [sql`scoped_plan.state = 'published'`, sql`scoped_plan.open_spots > 0`];
   if (filters.district) predicates.push(sql`scoped_plan.district = ${filters.district}`);
   if (filters.startsAfter) predicates.push(sql`scoped_plan.starts_at >= ${filters.startsAfter}`);
   if (filters.startsBefore) predicates.push(sql`scoped_plan.starts_at < ${filters.startsBefore}`);
   if (filters.venueType) predicates.push(sql`scoped_plan.venue_type = ${filters.venueType}`);
+  if (filters.cursor) {
+    // Row-value keyset over the ORDER BY below. The boundary pair comes from the
+    // DB's own row (subquery), not from the client, so a client can only advance
+    // the scan, never widen the result — every page still re-applies the
+    // visibility spec and the business predicates independently, and an
+    // unknown / unseeable cursor id yields NULL here and an empty page.
+    predicates.push(
+      sql`(scoped_plan.starts_at, scoped_plan.id) >
+          (SELECT cursor_plan.starts_at, cursor_plan.id
+             FROM plan cursor_plan WHERE cursor_plan.id = ${filters.cursor.id})`,
+    );
+  }
 
   return scopedSelect<RawPlanRecord, PlanRecord[]>({
     actor,
@@ -95,7 +135,7 @@ function feed(actor: Actor, filters: PlanFeedFilters): ScopedQuery<PlanRecord[]>
     decode: (rows) => rows.map(decodePlan),
     selection,
     spec: visibilitySpecs.plan,
-    tail: sql`ORDER BY scoped_plan.starts_at, scoped_plan.id`,
+    tail: sql`ORDER BY scoped_plan.starts_at, scoped_plan.id LIMIT ${clampLimit(filters.limit)}`,
   });
 }
 
