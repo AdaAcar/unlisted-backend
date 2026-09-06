@@ -17,6 +17,10 @@ export const TRUSTED_DATABASE_FILES = new Set([
   'db/circles.ts',
   'db/client.ts',
   'db/migrate.mjs',
+  // A read repository that deliberately does not use `scopedSelect` — venues
+  // have no counterparty user, so no VisibilitySpec (C2). It opens withActor
+  // and runs a plain SELECT, which trips the raw-execution scan.
+  'db/repositories/venues.ts',
   'db/scope/resolve.ts',
   'db/scope/scoped.ts',
   'db/session.ts',

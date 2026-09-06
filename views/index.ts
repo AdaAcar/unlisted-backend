@@ -5,7 +5,8 @@
  * A domain entity is never serialized directly to a client. Adding a field to an
  * entity must not change any response without a deliberate edit here.
  *
- * C1 adds the first real view model (`CircleView`). The full per-audience set
- * arrives in phase F.
+ * C1 adds the first real view model (`CircleView`), C2 the second
+ * (`VenueView`). The full per-audience set arrives in phase F.
  */
 export { toCircleView, type CircleView } from './circles';
+export { toVenueView, type VenueView } from './venues';

@@ -313,17 +313,23 @@ describe('RLS deny by default', () => {
     // joined_at/removed_at), so — like B2's verification UPDATE — it does not
     // register as table-wide `canUpdate`. unlisted_admin gets nothing new:
     // no admin path needs `circle`.
+    //
+    // C2 (0010_venue_read.sql): unlisted_app alone gets a column-scoped
+    // SELECT on venue's six public columns (licence_ref / capacity_hint
+    // omitted). Same as "user": `has_table_privilege(..., 'SELECT')` is
+    // false because there is no table-wide grant; the column-privilege test
+    // below proves the real shape. Read-only — no INSERT/UPDATE/DELETE.
     for (const row of privileges.rows) {
       const isAppAuditInsert = row.grantee === 'unlisted_app' && row.tableName === 'audit_log';
       const isSession = row.tableName === 'session';
       const isAppSessionRW = row.grantee === 'unlisted_app' && isSession;
-      const isUser = row.tableName === 'user';
+      const isColumnScopedSelect = row.tableName === 'user' || row.tableName === 'venue';
       const isApp = row.grantee === 'unlisted_app';
       const isAppCircle = isApp && row.tableName === 'circle';
       const isAppCircleMemberInsert = isApp && row.tableName === 'circle_member';
 
       expect(row.canSelect).toBe(
-        isUser ? false : allowed.has(row.tableName) || isSession || isAppCircle,
+        isColumnScopedSelect ? false : allowed.has(row.tableName) || isSession || isAppCircle,
       );
       expect(row.canInsert).toBe(
         isAppAuditInsert || isAppSessionRW || isAppCircle || isAppCircleMemberInsert,
@@ -399,7 +405,7 @@ describe('RLS deny by default', () => {
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), and the circle / circle_member read+write policies (C1)', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), the circle / circle_member read+write policies (C1), and the venue read policy (C2)', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
@@ -425,6 +431,7 @@ describe('RLS deny by default', () => {
       { cmd: 'SELECT', tablename: 'session' },
       { cmd: 'SELECT', tablename: 'user' },
       { cmd: 'UPDATE', tablename: 'user' },
+      { cmd: 'SELECT', tablename: 'venue' },
     ]);
   });
 

@@ -17,7 +17,18 @@ export {
   type SystemAuditEntry,
   type UserAuditEntry,
 } from './audit';
-export { circles, plans, users } from './repositories';
+export {
+  circles,
+  getVenue,
+  listVenues,
+  plans,
+  users,
+  venues,
+  VENUE_TYPES,
+  type VenueFilters,
+  type VenueRecord,
+  type VenueType,
+} from './repositories';
 export {
   acceptCircleInvitation,
   createCircle,

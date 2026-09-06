@@ -71,6 +71,13 @@
       "when": 1788692047653,
       "tag": "0009_circle_access",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788696786438,
+      "tag": "0010_venue_read",
+      "breakpoints": true
     }
   ]
 }
