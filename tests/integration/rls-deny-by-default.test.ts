@@ -179,6 +179,11 @@ describe('RLS deny by default', () => {
         ['application_member_migrator_population_read', 'application_member', 'SELECT'],
         ['application_migrator_population_read', 'application', 'SELECT'],
         ['circle_member_migrator_population_read', 'circle_member', 'SELECT'],
+        // C8 (0012): the participant_count resync trigger runs as migrator and
+        // needs SELECT (to find the thread) + UPDATE (to set the count) on
+        // message_thread, which is FORCE-RLS with no other migrator policy.
+        ['message_thread_migrator_participant_count', 'message_thread', 'UPDATE'],
+        ['message_thread_migrator_read', 'message_thread', 'SELECT'],
         ['plan_introduction_migrator_insert', 'plan_participant_introduction', 'INSERT'],
         ['plan_introduction_migrator_read', 'plan_participant_introduction', 'SELECT'],
         ['plan_migrator_population_lock', 'plan', 'UPDATE'],
@@ -231,6 +236,7 @@ describe('RLS deny by default', () => {
            'app_actor_hosts_circle',
            'app_actor_leads_circle',
            'app_active_host_member_count',
+           'app_thread_participant',
            'reconcile_plan_participant_introductions',
            'reconcile_introductions_from_plan',
            'reconcile_introductions_from_application',
@@ -251,6 +257,7 @@ describe('RLS deny by default', () => {
       'app_actor_hosts_circle(counterparty_circle_id character varying)',
       'app_actor_leads_circle(counterparty_circle_id character varying)',
       'app_active_host_member_count(counterparty_circle_id character varying)',
+      'app_thread_participant(counterparty_plan_id character varying)',
       'app_shared_introduction_visible(subject_user_id character varying)',
     ]);
     const adminFunctions = new Set([
@@ -262,7 +269,9 @@ describe('RLS deny by default', () => {
       'app_application_visible(counterparty_application_id character varying)',
       'app_actor_hosts_circle(counterparty_circle_id character varying)',
       'app_actor_leads_circle(counterparty_circle_id character varying)',
-      'app_active_host_member_count(counterparty_circle_id character varying)',
+      // app_active_host_member_count is NOT here: C8 (0012) moved it to
+      // unlisted_migrator ownership (see docs/state.md Known gaps C3), which
+      // drops the old owner's admin EXECUTE grant. Nothing admin-side calls it.
     ]);
     const populationFunctions = new Set([
       'reconcile_plan_participant_introductions(target_plan_id character varying, introduction_time timestamp with time zone)',
@@ -286,7 +295,7 @@ describe('RLS deny by default', () => {
         expect(row.adminCanExecute).toBe(false);
       }
     }
-    expect(functions.rows).toHaveLength(16);
+    expect(functions.rows).toHaveLength(17);
   });
 
   it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, the session grants (B1), the verification column grants (B2), and the app-only circle read + circle/circle_member write grants (C1), and no other mutations', async () => {
@@ -368,16 +377,25 @@ describe('RLS deny by default', () => {
       // host_circle_id and the guest counters excluded), which — like the B2 /
       // C1 column-scoped grants — does not register as table-wide `canUpdate`.
       const isAppPlanInsert = isApp && row.tableName === 'plan';
+      // C8 (0012): unlisted_app gets table-wide SELECT + INSERT on message_thread
+      // and message (read a thread you participate in; create one / post into
+      // it — all further gated by RLS). No UPDATE / DELETE — participant_count
+      // is trigger-maintained and retention is E2.
+      const isAppMessaging =
+        isApp && (row.tableName === 'message' || row.tableName === 'message_thread');
 
       expect(row.canSelect).toBe(
-        isColumnScopedSelect ? false : allowed.has(row.tableName) || isSession || isAppCircle,
+        isColumnScopedSelect
+          ? false
+          : allowed.has(row.tableName) || isSession || isAppCircle || isAppMessaging,
       );
       expect(row.canInsert).toBe(
         isAppAuditInsert ||
           isAppSessionRW ||
           isAppCircle ||
           isAppCircleMemberInsert ||
-          isAppPlanInsert,
+          isAppPlanInsert ||
+          isAppMessaging,
       );
       expect(row.canUpdate).toBe(false);
       expect(row.canDelete).toBe(isAppSessionRW);
@@ -450,7 +468,7 @@ describe('RLS deny by default', () => {
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), the circle / circle_member read+write policies (C1), the venue read policy (C2), and the plan write policies (C3)', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), the circle / circle_member read+write policies (C1), the venue read policy (C2), the plan write policies (C3), and the message_thread / message read+create policies (C8)', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
@@ -470,6 +488,12 @@ describe('RLS deny by default', () => {
       { cmd: 'SELECT', tablename: 'circle_member' },
       { cmd: 'SELECT', tablename: 'circle_member' },
       { cmd: 'UPDATE', tablename: 'circle_member' },
+      // C8 (0012): read a message you may see; post one as yourself.
+      { cmd: 'INSERT', tablename: 'message' },
+      { cmd: 'SELECT', tablename: 'message' },
+      // C8 (0012): read a thread you participate in; create one where you do.
+      { cmd: 'INSERT', tablename: 'message_thread' },
+      { cmd: 'SELECT', tablename: 'message_thread' },
       // 0004's `plan_app_read` plus 0011's `plan_app_insert` / `plan_app_update`
       // (C3 — draft creation and lifecycle writes, lead-gated).
       { cmd: 'INSERT', tablename: 'plan' },

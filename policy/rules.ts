@@ -89,9 +89,9 @@ export const rules: RuleTable = {
     isUser(actor) && resource.planMode === 'planned' && resource.isInvitee,
 
   'message.getThread': (actor, resource) =>
-    isUser(actor) && resource.actorIsCircleMember && resource.viable,
+    isUser(actor) && resource.threadParticipant && resource.viable,
   'message.postThread': (actor, resource) =>
-    isUser(actor) && resource.actorIsCircleMember && resource.viable,
+    isUser(actor) && resource.threadParticipant && resource.viable,
 
   'safety.report': (actor, resource) => isUser(actor) && resource.sharesPlanContext,
   'safety.block': (actor) => isUser(actor),

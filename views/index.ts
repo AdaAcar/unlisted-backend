@@ -10,5 +10,6 @@
  * in phase F.
  */
 export { toCircleView, type CircleView } from './circles';
+export { toMessageView, toThreadView, type MessageView, type ThreadView } from './messages';
 export { toPlanFeedView, toPlanView, type PlanFeedView, type PlanView } from './plans';
 export { toVenueView, type VenueView } from './venues';

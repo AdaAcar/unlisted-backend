@@ -87,8 +87,12 @@ export interface ResourceByAction {
   // viability rule win over docs/api.md's older wording here (a thread may
   // not exist before viable_at is set, which happens strictly after any
   // invitation is accepted -- see docs/state.md Traps on the viable_at latch).
-  'message.getThread': { actorIsCircleMember: boolean; viable: boolean };
-  'message.postThread': { actorIsCircleMember: boolean; viable: boolean };
+  // `threadParticipant`: the actor is a confirmed participant of the plan's
+  // thread — a row in `plan_participant_introduction` for this plan (C8). Named
+  // for what it means, not "circle member": with solo applicants a participant
+  // need not be in any circle.
+  'message.getThread': { threadParticipant: boolean; viable: boolean };
+  'message.postThread': { threadParticipant: boolean; viable: boolean };
 
   'safety.report': { sharesPlanContext: boolean };
   'safety.block': Record<string, never>;

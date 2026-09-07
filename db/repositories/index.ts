@@ -6,6 +6,13 @@ export {
   type FeedCursor,
   type PlanFeedFilters,
 } from './plans';
+export {
+  threads,
+  getThreadByPlan,
+  listThreadMessages,
+  type MessageRecord,
+  type ThreadRecord,
+} from './threads';
 export { users } from './users';
 export {
   getVenue,

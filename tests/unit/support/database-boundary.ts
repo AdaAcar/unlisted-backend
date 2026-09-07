@@ -16,12 +16,16 @@ export const TRUSTED_DATABASE_FILES = new Set([
   'db/audit.ts',
   'db/circles.ts',
   'db/plans.ts',
+  'db/threads.ts',
   'db/client.ts',
   'db/migrate.mjs',
-  // A read repository that deliberately does not use `scopedSelect` — venues
-  // have no counterparty user, so no VisibilitySpec (C2). It opens withActor
-  // and runs a plain SELECT, which trips the raw-execution scan.
+  // Read repositories that deliberately do not use `scopedSelect` — there is no
+  // counterparty-user `VisibilitySpec` to compose. venues have no counterparty
+  // (C2); threads/messages are gated entirely by migration 0012's RLS
+  // (`app_thread_participant`), so `db/repositories/threads.ts` opens withActor
+  // and runs a plain SELECT (C8). Both trip the raw-execution scan.
   'db/repositories/venues.ts',
+  'db/repositories/threads.ts',
   'db/scope/resolve.ts',
   'db/scope/scoped.ts',
   'db/session.ts',

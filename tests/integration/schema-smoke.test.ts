@@ -44,11 +44,11 @@ describe('migrations', () => {
     );
   });
 
-  it('records the complete bootstrap stack through 0011', async () => {
+  it('records the complete bootstrap stack through 0012', async () => {
     const { rows } = await t.pool.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`,
     );
-    expect(rows[0]?.n).toBe(12);
+    expect(rows[0]?.n).toBe(13);
   });
 
   it('hands the Drizzle ledger boundary to the migrator capability only', async () => {
@@ -131,6 +131,8 @@ describe('migrations', () => {
     expect(triggers.rows.map((row) => row.tgname)).toEqual([
       'plan_participant_introduction_no_delete',
       'plan_participant_introduction_no_update',
+      // C8 (0012): resyncs a thread's participant_count when the ledger grows.
+      'plan_participant_introduction_resync_thread_count',
     ]);
   });
 

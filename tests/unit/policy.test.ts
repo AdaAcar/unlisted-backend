@@ -531,28 +531,28 @@ describe('policy: mode-scoped actions deny in the wrong mode', () => {
 
 describe('policy: messages -- gated on viability, not invitation (docs/modes.md overrides api.md here)', () => {
   it('message.getThread allows a circle member once the plan is viable', () => {
-    expect(policy(HOST, 'message.getThread', { actorIsCircleMember: true, viable: true })).toBe(
+    expect(policy(HOST, 'message.getThread', { threadParticipant: true, viable: true })).toBe(
       'allow',
     );
   });
   it('message.getThread denies a circle member before viability', () => {
-    expect(policy(HOST, 'message.getThread', { actorIsCircleMember: true, viable: false })).toBe(
+    expect(policy(HOST, 'message.getThread', { threadParticipant: true, viable: false })).toBe(
       'deny',
     );
   });
   it('message.getThread denies a non-member even on a viable plan', () => {
-    expect(policy(HOST, 'message.getThread', { actorIsCircleMember: false, viable: true })).toBe(
+    expect(policy(HOST, 'message.getThread', { threadParticipant: false, viable: true })).toBe(
       'deny',
     );
   });
 
   it('message.postThread allows a circle member once the plan is viable', () => {
-    expect(policy(HOST, 'message.postThread', { actorIsCircleMember: true, viable: true })).toBe(
+    expect(policy(HOST, 'message.postThread', { threadParticipant: true, viable: true })).toBe(
       'allow',
     );
   });
   it('message.postThread denies a circle member before viability', () => {
-    expect(policy(HOST, 'message.postThread', { actorIsCircleMember: true, viable: false })).toBe(
+    expect(policy(HOST, 'message.postThread', { threadParticipant: true, viable: false })).toBe(
       'deny',
     );
   });

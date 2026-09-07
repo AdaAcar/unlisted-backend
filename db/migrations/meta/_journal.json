@@ -85,6 +85,13 @@
       "when": 1788722227485,
       "tag": "0011_plan_write",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788737789924,
+      "tag": "0012_thread_access",
+      "breakpoints": true
     }
   ]
 }

@@ -19,20 +19,31 @@ export {
 } from './audit';
 export {
   circles,
+  getThreadByPlan,
   getVenue,
+  listThreadMessages,
   listVenues,
   plans,
+  threads,
   users,
   venues,
   FEED_PAGE_DEFAULT,
   FEED_PAGE_MAX,
   VENUE_TYPES,
   type FeedCursor,
+  type MessageRecord,
   type PlanFeedFilters,
+  type ThreadRecord,
   type VenueFilters,
   type VenueRecord,
   type VenueType,
 } from './repositories';
+export {
+  createThreadForViablePlan,
+  postMessage,
+  type CreateThreadOutcome,
+  type PostMessageOutcome,
+} from './threads';
 export {
   acceptCircleInvitation,
   createCircle,
