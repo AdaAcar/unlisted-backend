@@ -13,8 +13,10 @@ export const DATABASE_SOURCE_EXTENSIONS = new Set([
 
 export const TRUSTED_DATABASE_FILES = new Set([
   'db/admin/index.ts',
+  'db/applications.ts',
   'db/audit.ts',
   'db/circles.ts',
+  'db/invitations.ts',
   'db/plans.ts',
   'db/threads.ts',
   'db/client.ts',
@@ -26,6 +28,9 @@ export const TRUSTED_DATABASE_FILES = new Set([
   // and runs a plain SELECT (C8). Both trip the raw-execution scan.
   'db/repositories/venues.ts',
   'db/repositories/threads.ts',
+  // Application reads: no counterparty-user VisibilitySpec — access is decided
+  // by migration 0002's `app_application_visible` RLS (C5/C6).
+  'db/repositories/applications.ts',
   'db/scope/resolve.ts',
   'db/scope/scoped.ts',
   'db/session.ts',

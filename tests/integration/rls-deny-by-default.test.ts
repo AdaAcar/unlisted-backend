@@ -117,16 +117,36 @@ describe('RLS deny by default', () => {
       await attempt(`INSERT INTO "user" (id, first_name) VALUES ($1, 'No')`, [
         '00000000000000000000000000',
       ]);
-      // C3 (0011) gave unlisted_app a column-scoped plan UPDATE, but only on
-      // the lifecycle columns — host_circle_id and the guest counters are not
-      // in the grant, so a raw attempt to move a plan's host or its accepted
-      // count is still a hard privilege error, and DELETE is ungranted too.
+      // C3 (0011) gave unlisted_app a column-scoped plan UPDATE on the
+      // lifecycle columns only; host_circle_id is still not in any grant, so a
+      // raw attempt to move a plan's host is a hard privilege error, and DELETE
+      // is ungranted too.
       await attempt(`UPDATE plan SET host_circle_id = $1 WHERE id = $2`, [
         fixture.circleId,
         fixture.planId,
       ]);
-      await attempt(`UPDATE plan SET accepted_guest_count = 99 WHERE id = $1`, [fixture.planId]);
       await attempt(`DELETE FROM plan WHERE id = $1`, [fixture.planId]);
+      // C7a (0013) DID grant unlisted_app a column-scoped UPDATE on
+      // accepted_guest_count / held_count — so this is no longer a privilege
+      // error. It is instead an RLS no-op: fixture.actorId is neither the host
+      // lead nor a party to an invited/accepted application, so
+      // plan_app_capacity_update matches zero rows.
+      {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('SET LOCAL ROLE unlisted_app');
+          await client.query(`SELECT set_config('app.actor_id', $1, true)`, [fixture.actorId]);
+          const res = await client.query(
+            `UPDATE plan SET accepted_guest_count = 99 WHERE id = $1`,
+            [fixture.planId],
+          );
+          expect(res.rowCount).toBe(0);
+          await client.query('ROLLBACK');
+        } finally {
+          client.release();
+        }
+      }
       expect(
         (await t.pool.query(`SELECT note FROM plan WHERE id = $1`, [fixture.planId])).rows[0],
       ).toEqual({ note: null });
@@ -237,6 +257,10 @@ describe('RLS deny by default', () => {
            'app_actor_leads_circle',
            'app_active_host_member_count',
            'app_thread_participant',
+           'app_actor_is_application_party',
+           'app_actor_has_capacity_stake_in_plan',
+           'app_user_has_overlapping_accepted_plan',
+           'enforce_plan_capacity_scope',
            'reconcile_plan_participant_introductions',
            'reconcile_introductions_from_plan',
            'reconcile_introductions_from_application',
@@ -259,6 +283,11 @@ describe('RLS deny by default', () => {
       'app_active_host_member_count(counterparty_circle_id character varying)',
       'app_thread_participant(counterparty_plan_id character varying)',
       'app_shared_introduction_visible(subject_user_id character varying)',
+      // C5/C7a (0013): policy predicates for the application write surface and
+      // the plan capacity-update policy, plus the overlap check.
+      'app_actor_is_application_party(counterparty_application_id character varying)',
+      'app_actor_has_capacity_stake_in_plan(counterparty_plan_id character varying)',
+      'app_user_has_overlapping_accepted_plan(subject_user_id character varying, window_start timestamp with time zone, window_end timestamp with time zone, exclude_application_id character varying)',
     ]);
     const adminFunctions = new Set([
       'app_current_actor_id()',
@@ -272,6 +301,11 @@ describe('RLS deny by default', () => {
       // app_active_host_member_count is NOT here: C8 (0012) moved it to
       // unlisted_migrator ownership (see docs/state.md Known gaps C3), which
       // drops the old owner's admin EXECUTE grant. Nothing admin-side calls it.
+      // C5/C7a (0013): owned by unlisted_admin like the other actor-scope
+      // predicates, so admin holds EXECUTE (SECURITY DEFINER runs as owner).
+      'app_actor_is_application_party(counterparty_application_id character varying)',
+      'app_actor_has_capacity_stake_in_plan(counterparty_plan_id character varying)',
+      'app_user_has_overlapping_accepted_plan(subject_user_id character varying, window_start timestamp with time zone, window_end timestamp with time zone, exclude_application_id character varying)',
     ]);
     const populationFunctions = new Set([
       'reconcile_plan_participant_introductions(target_plan_id character varying, introduction_time timestamp with time zone)',
@@ -295,7 +329,7 @@ describe('RLS deny by default', () => {
         expect(row.adminCanExecute).toBe(false);
       }
     }
-    expect(functions.rows).toHaveLength(17);
+    expect(functions.rows).toHaveLength(21);
   });
 
   it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, the session grants (B1), the verification column grants (B2), and the app-only circle read + circle/circle_member write grants (C1), and no other mutations', async () => {
@@ -377,6 +411,16 @@ describe('RLS deny by default', () => {
       // host_circle_id and the guest counters excluded), which — like the B2 /
       // C1 column-scoped grants — does not register as table-wide `canUpdate`.
       const isAppPlanInsert = isApp && row.tableName === 'plan';
+      // C5/C6/C7a (0013): unlisted_app gets table-wide INSERT on `application`
+      // and `application_member` (create an application; compose the circle),
+      // plus DELETE on `application_member` (withdraw-member). Its UPDATE on
+      // both is column-scoped (application: state/note/response_deadline/
+      // submitted_at/decided_at/withdrawn_at; application_member: confirmation
+      // /invitation columns), and plan's two new capacity counters are also
+      // column-scoped — none register as table-wide `canUpdate`.
+      const isAppApplicationInsert =
+        isApp && (row.tableName === 'application' || row.tableName === 'application_member');
+      const isAppApplicationMemberDelete = isApp && row.tableName === 'application_member';
       // C8 (0012): unlisted_app gets table-wide SELECT + INSERT on message_thread
       // and message (read a thread you participate in; create one / post into
       // it — all further gated by RLS). No UPDATE / DELETE — participant_count
@@ -395,10 +439,11 @@ describe('RLS deny by default', () => {
           isAppCircle ||
           isAppCircleMemberInsert ||
           isAppPlanInsert ||
-          isAppMessaging,
+          isAppMessaging ||
+          isAppApplicationInsert,
       );
       expect(row.canUpdate).toBe(false);
-      expect(row.canDelete).toBe(isAppSessionRW);
+      expect(row.canDelete).toBe(isAppSessionRW || isAppApplicationMemberDelete);
       expect(row.canTruncate).toBe(false);
       expect(row.canReferences).toBe(false);
       expect(row.canTrigger).toBe(false);
@@ -468,15 +513,22 @@ describe('RLS deny by default', () => {
     );
   });
 
-  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), the circle / circle_member read+write policies (C1), the venue read policy (C2), the plan write policies (C3), and the message_thread / message read+create policies (C8)', async () => {
+  it('gives the application capability exactly six scoped SELECT policies, plus the audit_log append policy, the session policies (B1), the verification write policy (B2), the circle / circle_member read+write policies (C1), the venue read policy (C2), the plan write policies (C3), the message_thread / message read+create policies (C8), and the application / application_member write policies plus the plan capacity-update policy (C5/C6/C7a)', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
        WHERE schemaname = 'public' AND 'unlisted_app' = ANY(roles)
        ORDER BY tablename, cmd`,
     );
     expect(policies.rows).toEqual([
+      // application: 0004 read + 0013 (C5) insert/update.
+      { cmd: 'INSERT', tablename: 'application' },
       { cmd: 'SELECT', tablename: 'application' },
+      { cmd: 'UPDATE', tablename: 'application' },
+      // application_member: 0004 read + 0013 (C5) delete/insert/update.
+      { cmd: 'DELETE', tablename: 'application_member' },
+      { cmd: 'INSERT', tablename: 'application_member' },
       { cmd: 'SELECT', tablename: 'application_member' },
+      { cmd: 'UPDATE', tablename: 'application_member' },
       { cmd: 'INSERT', tablename: 'audit_log' },
       { cmd: 'SELECT', tablename: 'block' },
       { cmd: 'INSERT', tablename: 'circle' },
@@ -495,9 +547,12 @@ describe('RLS deny by default', () => {
       { cmd: 'INSERT', tablename: 'message_thread' },
       { cmd: 'SELECT', tablename: 'message_thread' },
       // 0004's `plan_app_read` plus 0011's `plan_app_insert` / `plan_app_update`
-      // (C3 — draft creation and lifecycle writes, lead-gated).
+      // (C3 — draft creation and lifecycle writes, lead-gated) plus 0013's
+      // `plan_app_capacity_update` (C7a — the invitee's guest-counter write,
+      // confined to the counter columns by plan_enforce_capacity_scope).
       { cmd: 'INSERT', tablename: 'plan' },
       { cmd: 'SELECT', tablename: 'plan' },
+      { cmd: 'UPDATE', tablename: 'plan' },
       { cmd: 'UPDATE', tablename: 'plan' },
       { cmd: 'DELETE', tablename: 'session' },
       { cmd: 'INSERT', tablename: 'session' },

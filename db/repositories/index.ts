@@ -1,3 +1,11 @@
+export {
+  applications,
+  getApplication,
+  listPlanApplications,
+  type ApplicationRecord,
+  type ApplicationMemberRecord,
+  type ApplicationState,
+} from './applications';
 export { circles } from './circles';
 export {
   plans,

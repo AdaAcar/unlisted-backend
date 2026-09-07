@@ -98,6 +98,7 @@ describe('exhaustive state x action (solo application, no member confirmation ga
     'submit',
     'edit',
     'shortlist',
+    'unshortlist',
     'reject',
     'invite',
     'accept',
@@ -116,6 +117,8 @@ describe('exhaustive state x action (solo application, no member confirmation ga
       case 'edit':
         return { type, now };
       case 'shortlist':
+        return { type, now };
+      case 'unshortlist':
         return { type, now };
       case 'reject':
         return { type, now };
@@ -140,9 +143,16 @@ describe('exhaustive state x action (solo application, no member confirmation ga
       case 'submit':
         return state === 'draft' || state === 'awaiting_confirmation';
       case 'edit':
-        return state === 'draft' || state === 'awaiting_confirmation';
+        return (
+          state === 'draft' ||
+          state === 'awaiting_confirmation' ||
+          state === 'submitted' ||
+          state === 'shortlisted'
+        );
       case 'shortlist':
         return state === 'submitted';
+      case 'unshortlist':
+        return state === 'shortlisted';
       case 'reject':
         return state === 'submitted' || state === 'shortlisted';
       case 'invite':
@@ -224,11 +234,49 @@ describe('editing after partial confirmation voids prior confirmations', () => {
     expect(next.allMembersConfirmed).toBe(false);
   });
 
-  it('cannot edit once submitted', () => {
-    const base = snapshot({ state: 'submitted' });
-    expect(() => transitionPlannedApplication(base, { type: 'edit', now: NOW })).toThrow(
-      DomainError,
-    );
+  it('an edit after submission knocks the application back to awaiting_confirmation', () => {
+    for (const state of ['submitted', 'shortlisted'] as const) {
+      const base = snapshot({ state, allMembersConfirmed: true });
+      const next = transitionPlannedApplication(base, { type: 'edit', now: NOW });
+      expect(next.state).toBe('awaiting_confirmation');
+      expect(next.allMembersConfirmed).toBe(false);
+    }
+  });
+
+  it('cannot edit once the application is invited or terminal', () => {
+    for (const state of ['invited', 'accepted', 'declined', 'rejected', 'withdrawn'] as const) {
+      const base = snapshot({ state });
+      expect(() => transitionPlannedApplication(base, { type: 'edit', now: NOW })).toThrow(
+        DomainError,
+      );
+    }
+  });
+});
+
+describe('shortlist is reversible (docs/api.md Review)', () => {
+  it('unshortlist returns a shortlisted application to submitted', () => {
+    const base = snapshot({ state: 'shortlisted' });
+    const next = transitionPlannedApplication(base, { type: 'unshortlist', now: NOW });
+    expect(next.state).toBe('submitted');
+  });
+
+  it('unshortlist is only reachable from shortlisted', () => {
+    for (const state of STATES.filter((s) => s !== 'shortlisted')) {
+      const base = snapshot({ state });
+      expect(() => transitionPlannedApplication(base, { type: 'unshortlist', now: NOW })).toThrow(
+        DomainError,
+      );
+    }
+  });
+
+  it('shortlist -> unshortlist -> shortlist round-trips', () => {
+    let s = snapshot({ state: 'submitted' });
+    s = transitionPlannedApplication(s, { type: 'shortlist', now: NOW });
+    expect(s.state).toBe('shortlisted');
+    s = transitionPlannedApplication(s, { type: 'unshortlist', now: NOW });
+    expect(s.state).toBe('submitted');
+    s = transitionPlannedApplication(s, { type: 'shortlist', now: NOW });
+    expect(s.state).toBe('shortlisted');
   });
 });
 

@@ -18,9 +18,12 @@ export {
   type UserAuditEntry,
 } from './audit';
 export {
+  applications,
   circles,
+  getApplication,
   getThreadByPlan,
   getVenue,
+  listPlanApplications,
   listThreadMessages,
   listVenues,
   plans,
@@ -30,6 +33,9 @@ export {
   FEED_PAGE_DEFAULT,
   FEED_PAGE_MAX,
   VENUE_TYPES,
+  type ApplicationRecord,
+  type ApplicationMemberRecord,
+  type ApplicationState,
   type FeedCursor,
   type MessageRecord,
   type PlanFeedFilters,
@@ -44,6 +50,32 @@ export {
   type CreateThreadOutcome,
   type PostMessageOutcome,
 } from './threads';
+export {
+  confirmMember,
+  createApplication,
+  lockApplication,
+  rejectApplication,
+  shortlistApplication,
+  unshortlistApplication,
+  withdrawApplication,
+  withdrawMember,
+  type ConfirmOutcome,
+  type CreateApplicationInput,
+  type CreateApplicationOutcome,
+  type LockedApplication,
+  type ReviewOutcome,
+  type WithdrawMemberOutcome,
+  type WithdrawOutcome,
+} from './applications';
+export {
+  acceptInvitation,
+  declineInvitation,
+  expireInvitation,
+  inviteApplication,
+  type AcceptOutcome,
+  type DeclineOutcome,
+  type InviteOutcome,
+} from './invitations';
 export {
   acceptCircleInvitation,
   createCircle,

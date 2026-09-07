@@ -19,6 +19,9 @@
  *   to without re-consenting.
  * - The response deadline clamp, computed at invitation time and never past
  *   `starts_at`.
+ * - Shortlisting is reversible (`unshortlist`: shortlisted -> submitted),
+ *   per docs/api.md's Review table. Added as a C6 amendment to this A6
+ *   machine -- see docs/state.md Decisions (C6).
  */
 import { config } from '@/lib/config';
 
@@ -49,6 +52,7 @@ export type PlannedApplicationAction =
   | { type: 'submit'; now: Date }
   | { type: 'edit'; now: Date }
   | { type: 'shortlist'; now: Date }
+  | { type: 'unshortlist'; now: Date }
   | { type: 'reject'; now: Date }
   | { type: 'invite'; invitedCount: number; includedCount: number; startsAt: Date; now: Date }
   | { type: 'accept'; now: Date }
@@ -115,16 +119,33 @@ export function transitionPlannedApplication(
     }
 
     case 'edit': {
-      requireState(snapshot, ['draft', 'awaiting_confirmation']);
-      // The version hash changes, so every existing confirmation is stale;
-      // the caller re-derives member rows with voidStaleConfirmations and
-      // this aggregate flag follows.
-      return { ...snapshot, allMembersConfirmed: false };
+      requireState(snapshot, ['draft', 'awaiting_confirmation', 'submitted', 'shortlisted']);
+      // The version hash changes, so every existing confirmation is stale; the
+      // caller re-derives member rows with voidStaleConfirmations and this
+      // aggregate flag follows. An edit that lands after the application was
+      // already submitted (or shortlisted) -- the only in-scope trigger is
+      // `POST /applications/:id/withdraw-member` shrinking the member set --
+      // knocks it back to `awaiting_confirmation`: the smaller group must
+      // re-confirm and the host must re-shortlist. Added as a C5 amendment to
+      // this A6 machine (see docs/state.md Decisions C5).
+      const state =
+        snapshot.state === 'submitted' || snapshot.state === 'shortlisted'
+          ? 'awaiting_confirmation'
+          : snapshot.state;
+      return { ...snapshot, state, allMembersConfirmed: false };
     }
 
     case 'shortlist': {
       requireState(snapshot, ['submitted']);
       return { ...snapshot, state: 'shortlisted' };
+    }
+
+    case 'unshortlist': {
+      // docs/api.md Review: shortlist is "Reversible". The inverse of
+      // `shortlist` -- back to `submitted`, from where the host can shortlist
+      // again, reject, or leave it.
+      requireState(snapshot, ['shortlisted']);
+      return { ...snapshot, state: 'submitted' };
     }
 
     case 'reject': {

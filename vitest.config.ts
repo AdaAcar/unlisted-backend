@@ -25,6 +25,11 @@ export default defineConfig({
     // other. The suite is small enough that serial files cost nothing.
     fileParallelism: false,
     hookTimeout: 30000,
+    // The C5/C6/C7a route tests drive several full HTTP handlers per case, each
+    // opening its own actor-scoped transaction chain against real Postgres; a
+    // few (concurrency probes, multi-member confirm loops) legitimately take
+    // 5-15s. The default 5s testTimeout is for pure/unit work.
+    testTimeout: 20000,
     passWithNoTests: true,
   },
 });
