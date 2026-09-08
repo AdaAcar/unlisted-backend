@@ -682,10 +682,22 @@ describe('closePlanAtStartsAt / completePlan (E1 write helpers)', () => {
       const locked = await lockPlan(executor, planId);
       return closePlanAtStartsAt(executor, locked!, new Date());
     });
+    // The helper returns only a plan-state string — no attendee data (§3).
     expect(state).toBe('cancelled');
     const row = await planRow(planId);
     expect(row.cancellation_kind).toBe('non_viable');
     expect(row.applications_closed_at).not.toBeNull();
+    // Auto-cancel reveals nobody: no thread, and the introduction ledger is
+    // untouched (a non-viable plan has no viable_plan_key, so neither is even
+    // reachable).
+    expect(
+      (await t.pool.query(`SELECT 1 FROM message_thread WHERE plan_id = $1`, [planId])).rowCount,
+    ).toBe(0);
+    const ledger = await t.pool.query<{ n: string }>(
+      `SELECT count(*)::int AS n FROM plan_participant_introduction WHERE plan_id = $1`,
+      [planId],
+    );
+    expect(Number(ledger.rows[0]?.n)).toBe(0);
   });
 
   it('completes a viable plan past its start and banks the host circle record counter', async () => {
