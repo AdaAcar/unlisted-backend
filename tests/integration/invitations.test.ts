@@ -102,11 +102,12 @@ describe('C7a accept / decline', () => {
     expect(Number(row.held_count)).toBe(0);
     expect(Number(row.accepted_guest_count)).toBe(1);
     expect(row.viable_at).not.toBeNull(); // host 2 + guest 1 = 3
-    // C7c owns thread creation — none exists yet.
+    // C7c: the viability crossing opens the thread inside the same locked
+    // transaction that stamped viable_at.
     expect(
       (await t.pool.query(`SELECT 1 FROM message_thread WHERE plan_id = $1`, [plan.planId]))
         .rowCount,
-    ).toBe(0);
+    ).toBe(1);
     // The viability latch populated the introduction ledger off the crossing.
     expect(await introducedUserIds(t, plan.planId)).toContain(applicant);
     expect((await introducedUserIds(t, plan.planId)).length).toBe(3);

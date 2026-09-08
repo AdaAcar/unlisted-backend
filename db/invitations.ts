@@ -4,16 +4,19 @@ import type { Ulid } from '@/db/scope/actor';
 import type { ActorTransaction } from '@/db/scope/scoped';
 import type { LockedApplication } from '@/db/applications';
 import type { LockedPlan } from '@/db/plans';
+import { createThreadForViablePlan } from '@/db/threads';
 import {
   transitionPlannedApplication,
   type PlannedApplicationSnapshot,
 } from '@/domain/application-planned';
+import { transitionTonightApplication } from '@/domain/application-tonight';
 import { transitionPlan, type PlanSnapshot } from '@/domain/plan';
 import { DomainError } from '@/domain/types';
 
 /**
- * The capacity-affecting invitation path (C6 invite, C7a accept / decline, and
- * the E1 release helper). Every function here runs inside the caller's
+ * The capacity-affecting attendance path — planned invitations plus tonight
+ * approve (C6 invite, C7a accept / decline, C7b approve, and the E1 release
+ * helper). Every function here runs inside the caller's
  * `withActor` transaction with the plan already locked `FOR UPDATE` (§3 —
  * never read-then-write). Every state decision goes through the A6 reducers:
  * `transitionPlannedApplication` for the application, `transitionPlan` for the
@@ -71,6 +74,47 @@ function appSnapshot(application: LockedApplication): PlannedApplicationSnapshot
     allMembersConfirmed: false,
     responseDeadline: null,
   };
+}
+
+/**
+ * Create the plan's message thread on the first viability crossing only, under
+ * the plan row lock, right after the UPDATE that stamped `viable_at` (C7c,
+ * docs/state.md Decisions C7b + C7c). The reconcile trigger has already
+ * populated `plan_participant_introduction` from the crossing, so the acting
+ * user is in the ledger (→ `message_thread_app_insert` RLS passes) and the
+ * ledger is ≥ 3 (→ the participant-count check passes). Thread and latch commit
+ * together; the plan lock means only one transaction is ever "first crossing".
+ *
+ * `ok` and `{ reason: 'exists' }` (the belt-and-suspenders `message_thread_plan_uq`
+ * path) both proceed. `not_viable` is non-fatal: a host member going inactive
+ * after publish can leave the reducer saying viable while the live ledger is
+ * short of three — throwing there would roll back a legitimate acceptance with
+ * a 500 over someone else's membership change. The latch stays, no thread — the
+ * counter-drift case E1's reconciliation closes (docs/state.md Known gaps).
+ * Only `not_participant`, which should be structurally unreachable here, throws.
+ */
+async function createThreadOnCrossing(
+  executor: ActorTransaction,
+  planId: Ulid,
+  before: Date | null,
+  after: Date | null,
+): Promise<void> {
+  if (before !== null || after === null) return;
+  // The INSERT can fail (CHECK / UNIQUE / RLS) and poison the transaction.
+  // A savepoint keeps the just-committed `viable_at` latch intact when it does.
+  await executor.execute(sql`SAVEPOINT before_thread`);
+  const outcome = await createThreadForViablePlan(executor, planId);
+  if (outcome.ok) {
+    await executor.execute(sql`RELEASE SAVEPOINT before_thread`);
+    return;
+  }
+  await executor.execute(sql`ROLLBACK TO SAVEPOINT before_thread`);
+  if (outcome.reason === 'not_participant') {
+    throw new Error(`thread creation reported not_participant for plan ${planId}`);
+  }
+  // `not_viable` (a host member went inactive after publish — the live ledger
+  // is short of three) and `exists` (the plan lock should make this
+  // unreachable) are both non-fatal: latch stays, no thread this pass.
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +295,7 @@ export async function acceptInvitation(
            viable_at = ${planNext.viableAt}
      WHERE id = ${plan.id}
   `);
+  await createThreadOnCrossing(executor, plan.id, plan.viableAt, planNext.viableAt);
   return { outcome: 'accepted', viable: planNext.viableAt !== null, idempotent: false };
 }
 
@@ -331,4 +376,65 @@ async function releaseHold(
     `);
   }
   return { outcome: 'declined', idempotent: false };
+}
+
+// ---------------------------------------------------------------------------
+// Approve (C7b — tonight mode)
+// ---------------------------------------------------------------------------
+
+export type ApproveOutcome =
+  | { outcome: 'approved'; viable: boolean; idempotent: boolean }
+  | { outcome: 'not_approvable' }
+  | { outcome: 'capacity' };
+
+/**
+ * `POST /applications/:id/approve`. Tonight mode's one-tap acceptance: the host
+ * lead approves a `submitted` solo application and the applicant is in, hard-
+ * consuming a spot directly (no soft hold — see `domain/plan.ts`'s `approve`).
+ * Idempotent from `approved`. `count` is always 1: every tonight application is
+ * solo (C5), so tonight group semantics stay deferred, not half-built here.
+ *
+ * Write order mirrors `acceptInvitation`: the application first (`state =
+ * 'approved'`, `decided_at`), then the plan (`accepted_guest_count`,
+ * `viable_at`) — so the `0004` `plan_reconcile_participant_introductions`
+ * trigger sees `state = 'approved'` when it populates the ledger on a latch.
+ * Both reducer calls run before any write, so a capacity failure leaves zero
+ * writes. No overlap check (docs/modes.md names none for tonight;
+ * docs/state.md Known gaps).
+ */
+export async function approveApplication(
+  executor: ActorTransaction,
+  plan: LockedPlan,
+  application: LockedApplication,
+  now: Date,
+): Promise<ApproveOutcome> {
+  if (application.state === 'approved') {
+    return { outcome: 'approved', viable: plan.viableAt !== null, idempotent: true };
+  }
+  if (application.state !== 'submitted') return { outcome: 'not_approvable' };
+
+  // Both reducer calls first: a capacity failure must leave zero writes.
+  transitionTonightApplication(
+    { state: application.state as 'submitted' },
+    { type: 'approve', now },
+  );
+  let planNext;
+  try {
+    planNext = transitionPlan(planSnapshot(plan), { type: 'approve', count: 1, now });
+  } catch (error) {
+    if (error instanceof DomainError) return { outcome: 'capacity' };
+    throw error;
+  }
+
+  await executor.execute(sql`
+    UPDATE application SET state = 'approved', decided_at = ${now} WHERE id = ${application.id}
+  `);
+  await executor.execute(sql`
+    UPDATE plan
+       SET accepted_guest_count = ${planNext.acceptedGuestCount},
+           viable_at = ${planNext.viableAt}
+     WHERE id = ${plan.id}
+  `);
+  await createThreadOnCrossing(executor, plan.id, plan.viableAt, planNext.viableAt);
+  return { outcome: 'approved', viable: planNext.viableAt !== null, idempotent: false };
 }

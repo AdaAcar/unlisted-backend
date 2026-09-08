@@ -450,7 +450,7 @@ describe('POST /plans/:id/publish', () => {
     expect(((await res.json()) as { mode: string }).mode).toBe('tonight');
   });
 
-  it('latches viable_at at publish when the host circle alone meets MIN_PLAN_TOTAL', async () => {
+  it('does NOT latch viable_at at publish for a host circle alone (Decision B: needs an accepted guest)', async () => {
     const { circleId, leadId } = await seedCircle(2); // lead + 2 = 3 active hosts
     const { id: venueId } = await seedVenue();
     const cookie = await cookieFor(leadId);
@@ -458,17 +458,19 @@ describe('POST /plans/:id/publish', () => {
 
     const res = await publishPlanRoute(jsonReq(cookie, undefined), idCtx(planId));
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { viable: boolean }).viable).toBe(true);
+    expect(((await res.json()) as { viable: boolean }).viable).toBe(false);
 
     const row = await planRow(planId);
     expect(row.confirmed_host_count).toBe(3);
-    expect(row.viable_at).not.toBeNull();
+    expect(row.viable_at).toBeNull();
 
+    // No introduction ledger rows: a host circle meeting itself is not a plan
+    // that came together (docs/state.md Decisions C7b + C7c).
     const intro = await t.pool.query<{ n: string }>(
       `SELECT count(*)::int AS n FROM plan_participant_introduction WHERE plan_id = $1`,
       [planId],
     );
-    expect(Number(intro.rows[0]?.n)).toBe(3);
+    expect(Number(intro.rows[0]?.n)).toBe(0);
   });
 
   it('rejects publish of an infeasible plan (host + open spots < MIN_PLAN_TOTAL)', async () => {
@@ -686,12 +688,18 @@ describe('closePlanAtStartsAt / completePlan (E1 write helpers)', () => {
     expect(row.applications_closed_at).not.toBeNull();
   });
 
-  it('completes a viable plan past its start', async () => {
-    const { circleId, leadId } = await seedCircle(2); // 3 active hosts -> viable at publish
+  it('completes a viable plan past its start and banks the host circle record counter', async () => {
+    const { circleId, leadId } = await seedCircle(2); // 3 active hosts
     const { id: venueId } = await seedVenue();
     const cookie = await cookieFor(leadId);
     const planId = await createDraft(cookie, circleId, venueId, { startsInDays: 3, openSpots: 2 });
     await publishPlanRoute(jsonReq(cookie, undefined), idCtx(planId));
+    // Decision B: viability now needs an accepted guest. Latch it directly
+    // (3 hosts + 1 guest = 4 >= MIN_PLAN_TOTAL, guest >= 1).
+    await t.pool.query(
+      `UPDATE plan SET accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
+      [planId],
+    );
     await t.pool.query(`UPDATE plan SET starts_at = now() - interval '1 minute' WHERE id = $1`, [
       planId,
     ]);
@@ -705,5 +713,69 @@ describe('closePlanAtStartsAt / completePlan (E1 write helpers)', () => {
     const row = await planRow(planId);
     expect(row.state).toBe('completed');
     expect(row.completed_at).not.toBeNull();
+    // Decision C: plan completion banks circle.plans_hosted for the host circle.
+    const circle = await t.pool.query<{ plans_hosted: number; plans_attended: number }>(
+      `SELECT plans_hosted, plans_attended FROM circle WHERE id = $1`,
+      [circleId],
+    );
+    expect(circle.rows[0]).toEqual({ plans_hosted: 1, plans_attended: 0 });
+  });
+
+  it('completePlan banks plans_attended for a distinct guest circle with an accepted application', async () => {
+    const { circleId: hostCircleId, leadId } = await seedCircle(2); // 3 active hosts
+    const { id: venueId } = await seedVenue();
+    const cookie = await cookieFor(leadId);
+    const planId = await createDraft(cookie, hostCircleId, venueId, {
+      startsInDays: 3,
+      openSpots: 2,
+    });
+    await publishPlanRoute(jsonReq(cookie, undefined), idCtx(planId));
+
+    // A guest circle with one accepted planned application on the plan.
+    const guestLead = await seedUser();
+    const guestCircleId = ulid();
+    await t.pool.query(`INSERT INTO circle (id, name, lead_user_id) VALUES ($1, 'Guests', $2)`, [
+      guestCircleId,
+      guestLead,
+    ]);
+    await t.pool.query(
+      `INSERT INTO circle_member (id, circle_id, user_id, role, status, joined_at)
+       VALUES ($1, $2, $3, 'lead', 'active', now())`,
+      [ulid(), guestCircleId, guestLead],
+    );
+    const appId = ulid();
+    await t.pool.query(
+      `INSERT INTO application (id, plan_id, applicant_circle_id, mode, state, submitted_at)
+       VALUES ($1, $2, $3, 'planned', 'accepted', now())`,
+      [appId, planId, guestCircleId],
+    );
+    await t.pool.query(
+      `INSERT INTO application_member (id, application_id, user_id, invitation_state)
+       VALUES ($1, $2, $3, 'accepted')`,
+      [ulid(), appId, guestLead],
+    );
+    await t.pool.query(
+      `UPDATE plan SET accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
+      [planId],
+    );
+    await t.pool.query(`UPDATE plan SET starts_at = now() - interval '1 minute' WHERE id = $1`, [
+      planId,
+    ]);
+
+    await withActor(userActor(leadId), async (executor) => {
+      const locked = await lockPlan(executor, planId);
+      return completePlan(executor, locked!, new Date());
+    });
+
+    const host = await t.pool.query<{ plans_hosted: number; plans_attended: number }>(
+      `SELECT plans_hosted, plans_attended FROM circle WHERE id = $1`,
+      [hostCircleId],
+    );
+    const guest = await t.pool.query<{ plans_hosted: number; plans_attended: number }>(
+      `SELECT plans_hosted, plans_attended FROM circle WHERE id = $1`,
+      [guestCircleId],
+    );
+    expect(host.rows[0]).toEqual({ plans_hosted: 1, plans_attended: 0 });
+    expect(guest.rows[0]).toEqual({ plans_hosted: 0, plans_attended: 1 });
   });
 });

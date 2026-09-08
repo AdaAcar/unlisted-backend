@@ -167,9 +167,14 @@ export type PublishOutcome =
 
 /**
  * `POST /plans/:id/publish`. `publish` sets state + mode; `setHostCount` then
- * stamps `confirmed_host_count` from the active host-circle membership and
- * latches `viable_at` if the host circle alone already meets `MIN_PLAN_TOTAL`
- * (docs/state.md Decisions C3). Both reducer calls, one locked transaction.
+ * stamps `confirmed_host_count` from the active host-circle membership.
+ *
+ * Publish no longer latches `viable_at`: Decision B (docs/state.md Decisions
+ * C7b + C7c) requires at least one accepted guest for viability, and a
+ * freshly-published plan has none — `computeViableAt` returns `null` on its
+ * own, so this needs no special-case here. (This reverses the C3 "host circle
+ * alone latches at publish" behaviour; the C3 decision entry records the
+ * supersession.) Both reducer calls, one locked transaction.
  */
 export async function publishPlan(
   executor: ActorTransaction,
@@ -347,9 +352,42 @@ export async function closePlanAtStartsAt(
 export type CompleteOutcome = 'completed' | 'not_completable';
 
 /**
+ * Runs `fn` with the transaction's `app.actor_id` GUC temporarily set to
+ * `system:<label>`, restoring the caller's actor id afterward. The 0014
+ * `circle_system_record_*` policies gate the record-counter writes on
+ * `app_current_actor_id() LIKE 'system:%'`, and a guest circle is neither led
+ * by nor visible to the completing host lead — so the counter UPDATEs must run
+ * under a system identity even inside a user transaction (docs/state.md
+ * Decisions C7b + C7c). When E1's worker eventually runs `completePlan` as
+ * `SYSTEM_ACTOR` this swap is a harmless no-op.
+ */
+async function asSystemActor<T>(
+  executor: ActorTransaction,
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = (await executor.execute(sql`SELECT current_setting('app.actor_id', true) AS v`))
+    .rows[0] as { v: string | null };
+  await executor.execute(sql`SELECT set_config('app.actor_id', ${`system:${label}`}, true)`);
+  try {
+    return await fn();
+  } finally {
+    await executor.execute(sql`SELECT set_config('app.actor_id', ${prev?.v ?? ''}, true)`);
+  }
+}
+
+/**
  * E1 worker persist path — no HTTP endpoint. `complete` requires the plan to be
  * past `starts_at` and viable; a non-viable plan has necessarily already been
  * cancelled by `closePlanAtStartsAt` (docs/state.md Decisions A6).
+ *
+ * On completion the circle record counters are banked (Decision C, docs/state.md
+ * Decisions C7b + C7c): `circle.plans_hosted += 1` for the host circle, and
+ * `circle.plans_attended += 1` for every distinct guest circle holding an
+ * accepted (planned) or approved (tonight) application on this plan. Solo
+ * guests have no circle, so nothing accrues for them. `no_shows` /
+ * `late_declines` are signal-class and are never granted. The counter writes go
+ * through a system actor (`asSystemActor`) against the 0014 policies.
  */
 export async function completePlan(
   executor: ActorTransaction,
@@ -366,5 +404,33 @@ export async function completePlan(
   await executor.execute(sql`
     UPDATE plan SET state = ${next.state}, completed_at = ${now} WHERE id = ${plan.id}
   `);
+
+  // Distinct guest circles with a live accepted/approved application — read
+  // under the caller's actor (a host-circle member can see the plan's
+  // applications via application_app_read).
+  const guestCircleRows = (
+    await executor.execute(sql`
+      SELECT DISTINCT applicant_circle_id AS "circleId"
+        FROM application
+       WHERE plan_id = ${plan.id}
+         AND applicant_circle_id IS NOT NULL
+         AND (
+           (mode = 'planned' AND state = 'accepted')
+           OR (mode = 'tonight' AND state = 'approved')
+         )
+    `)
+  ).rows as { circleId: string }[];
+
+  await asSystemActor(executor, 'complete_plan', async () => {
+    await executor.execute(sql`
+      UPDATE circle SET plans_hosted = plans_hosted + 1 WHERE id = ${plan.hostCircleId}
+    `);
+    for (const { circleId } of guestCircleRows) {
+      await executor.execute(sql`
+        UPDATE circle SET plans_attended = plans_attended + 1 WHERE id = ${circleId}
+      `);
+    }
+  });
+
   return 'completed';
 }

@@ -106,4 +106,23 @@ function membershipFacts(actor: Actor, id: string): ScopedQuery<CircleMembership
   });
 }
 
-export const circles = { get, membershipFacts };
+/**
+ * The tonight-mode hosting gate (C7b, Decision A / docs/state.md Decisions C7b
+ * + C7c): cleared once the host circle has completed at least one plan as a
+ * host or as a guest — `plans_hosted > 0 OR plans_attended > 0`. Read under
+ * `circle_app_read` (members-only); the host lead is a member, so it resolves.
+ * A circle the actor cannot see (or that does not exist) reads as `false` — the
+ * route turns that into `403 tonight_locked`.
+ */
+function tonightGateCleared(actor: Actor, id: string): ScopedQuery<boolean> {
+  return scopedSelect<{ cleared: boolean }, boolean>({
+    actor,
+    businessPredicates: [sql`scoped_circle.id = ${id}`],
+    decode: (rows) => rows[0]?.cleared === true,
+    selection: sql`(scoped_circle.plans_hosted > 0 OR scoped_circle.plans_attended > 0) AS "cleared"`,
+    spec: visibilitySpecs.circle,
+    tail: sql`LIMIT 1`,
+  });
+}
+
+export const circles = { get, membershipFacts, tonightGateCleared };

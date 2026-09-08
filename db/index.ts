@@ -69,10 +69,12 @@ export {
 } from './applications';
 export {
   acceptInvitation,
+  approveApplication,
   declineInvitation,
   expireInvitation,
   inviteApplication,
   type AcceptOutcome,
+  type ApproveOutcome,
   type DeclineOutcome,
   type InviteOutcome,
 } from './invitations';

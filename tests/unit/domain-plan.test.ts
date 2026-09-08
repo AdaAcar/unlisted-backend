@@ -64,10 +64,23 @@ describe('canPublish / computeMode / isViable', () => {
     expect(computeMode(belowThreshold, NOW)).toBe('tonight');
   });
 
-  it('viability is the floor, not one below it', () => {
-    expect(isViable(config.MIN_PLAN_TOTAL - 1)).toBe(false);
-    expect(isViable(config.MIN_PLAN_TOTAL)).toBe(true);
-    expect(isViable(config.MIN_PLAN_TOTAL + 5)).toBe(true);
+  it('viability is the floor AND at least one accepted guest (Decision B)', () => {
+    // Below the floor, regardless of guests.
+    expect(isViable({ confirmedHostCount: 1, acceptedGuestCount: 1 })).toBe(false);
+    // At the floor but a host circle meeting itself (0 guests) -> not viable.
+    expect(isViable({ confirmedHostCount: config.MIN_PLAN_TOTAL, acceptedGuestCount: 0 })).toBe(
+      false,
+    );
+    expect(isViable({ confirmedHostCount: config.MIN_PLAN_TOTAL + 5, acceptedGuestCount: 0 })).toBe(
+      false,
+    );
+    // At the floor with one accepted guest -> viable.
+    expect(isViable({ confirmedHostCount: config.MIN_PLAN_TOTAL - 1, acceptedGuestCount: 1 })).toBe(
+      true,
+    );
+    expect(isViable({ confirmedHostCount: 0, acceptedGuestCount: config.MIN_PLAN_TOTAL })).toBe(
+      true,
+    );
   });
 
   it('confirmedTotal sums host and guest counts', () => {
@@ -75,20 +88,33 @@ describe('canPublish / computeMode / isViable', () => {
   });
 });
 
+const belowFloor = { confirmedHostCount: 1, acceptedGuestCount: 1 };
+const hostOnlyAtFloor = { confirmedHostCount: config.MIN_PLAN_TOTAL, acceptedGuestCount: 0 };
+const atFloorWithGuest = {
+  confirmedHostCount: config.MIN_PLAN_TOTAL - 1,
+  acceptedGuestCount: 1,
+};
+
 describe('viable_at latch', () => {
   it('stays null below the floor', () => {
-    expect(computeViableAt(null, config.MIN_PLAN_TOTAL - 1, NOW)).toBeNull();
+    expect(computeViableAt(null, belowFloor, NOW)).toBeNull();
   });
 
-  it('latches to now on first crossing', () => {
-    expect(computeViableAt(null, config.MIN_PLAN_TOTAL, NOW)).toEqual(NOW);
+  it('stays null for a host circle alone at the floor (Decision B: needs a guest)', () => {
+    expect(computeViableAt(null, hostOnlyAtFloor, NOW)).toBeNull();
   });
 
-  it('never clears once set, even if the total later drops below the floor', () => {
+  it('latches to now on first crossing (floor reached with an accepted guest)', () => {
+    expect(computeViableAt(null, atFloorWithGuest, NOW)).toEqual(NOW);
+  });
+
+  it('never clears once set, even if the counts later drop below the floor', () => {
     const latchedAt = new Date(NOW.getTime() - HOUR);
     const later = new Date(NOW.getTime() + HOUR);
-    expect(computeViableAt(latchedAt, 0, later)).toEqual(latchedAt);
-    expect(computeViableAt(latchedAt, config.MIN_PLAN_TOTAL + 1, later)).toEqual(latchedAt);
+    expect(
+      computeViableAt(latchedAt, { confirmedHostCount: 0, acceptedGuestCount: 0 }, later),
+    ).toEqual(latchedAt);
+    expect(computeViableAt(latchedAt, hostOnlyAtFloor, later)).toEqual(latchedAt);
   });
 });
 
@@ -380,7 +406,8 @@ describe('close: the three closure conditions', () => {
       const base = snapshot({
         state,
         mode: 'planned',
-        confirmedHostCount: config.MIN_PLAN_TOTAL,
+        confirmedHostCount: config.MIN_PLAN_TOTAL - 1,
+        acceptedGuestCount: 1,
       });
       const next = transitionPlan(base, { type: 'close', trigger: 'starts_at', now: NOW });
       expect(next.applicationsClosedAt).toEqual(NOW);
@@ -393,7 +420,8 @@ describe('close: the three closure conditions', () => {
       state: 'applications_closed',
       mode: 'planned',
       applicationsClosedAt: earlier,
-      confirmedHostCount: config.MIN_PLAN_TOTAL,
+      confirmedHostCount: config.MIN_PLAN_TOTAL - 1,
+      acceptedGuestCount: 1,
     });
     const next = transitionPlan(base, { type: 'close', trigger: 'starts_at', now: NOW });
     expect(next.applicationsClosedAt).toEqual(earlier);
@@ -403,10 +431,23 @@ describe('close: the three closure conditions', () => {
     const base = snapshot({
       state: 'published',
       mode: 'planned',
-      confirmedHostCount: config.MIN_PLAN_TOTAL,
+      confirmedHostCount: config.MIN_PLAN_TOTAL - 1,
+      acceptedGuestCount: 1,
     });
     const next = transitionPlan(base, { type: 'close', trigger: 'starts_at', now: NOW });
     expect(next.state).toBe('published');
+  });
+
+  it('starts_at closure auto-cancels a host-only plan at the floor (Decision B: 0 guests is not viable)', () => {
+    const base = snapshot({
+      state: 'published',
+      mode: 'tonight',
+      confirmedHostCount: config.MIN_PLAN_TOTAL,
+      acceptedGuestCount: 0,
+    });
+    const next = transitionPlan(base, { type: 'close', trigger: 'starts_at', now: NOW });
+    expect(next.state).toBe('cancelled');
+    expect(next.cancellationKind).toBe('non_viable');
   });
 
   it('starts_at closure auto-cancels a non-viable plan, from either published or applications_closed', () => {
@@ -453,7 +494,8 @@ describe('complete', () => {
     const base = snapshot({
       state: 'published',
       mode: 'planned',
-      confirmedHostCount: config.MIN_PLAN_TOTAL,
+      confirmedHostCount: config.MIN_PLAN_TOTAL - 1,
+      acceptedGuestCount: 1,
     });
     expect(() => transitionPlan(base, { type: 'complete', now: NOW })).toThrow(DomainError);
     const next = transitionPlan(base, { type: 'complete', now: STARTS_AT });
@@ -465,11 +507,22 @@ describe('complete', () => {
     expect(() => transitionPlan(base, { type: 'complete', now: STARTS_AT })).toThrow(DomainError);
   });
 
+  it('cannot complete a host-only plan at the floor (Decision B: needs an accepted guest)', () => {
+    const base = snapshot({
+      state: 'published',
+      mode: 'tonight',
+      confirmedHostCount: config.MIN_PLAN_TOTAL,
+      acceptedGuestCount: 0,
+    });
+    expect(() => transitionPlan(base, { type: 'complete', now: STARTS_AT })).toThrow(DomainError);
+  });
+
   it.each(['draft', 'completed', 'cancelled'] as const)('is unreachable from %s', (state) => {
     const base = snapshot({
       state,
       mode: state === 'draft' ? null : 'planned',
-      confirmedHostCount: config.MIN_PLAN_TOTAL,
+      confirmedHostCount: config.MIN_PLAN_TOTAL - 1,
+      acceptedGuestCount: 1,
     });
     expect(() => transitionPlan(base, { type: 'complete', now: STARTS_AT })).toThrow(DomainError);
   });

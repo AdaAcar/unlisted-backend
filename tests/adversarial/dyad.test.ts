@@ -4,9 +4,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { POST as createApplicationRoute } from '@/app/api/plans/[id]/applications/route';
 import { POST as shortlistRoute } from '@/app/api/applications/[id]/shortlist/route';
 import { POST as inviteRoute } from '@/app/api/applications/[id]/invite/route';
+import { POST as approveRoute } from '@/app/api/applications/[id]/approve/route';
 import { POST as acceptRoute } from '@/app/api/invitations/[id]/accept/route';
 import { GET as threadRoute } from '@/app/api/plans/[id]/thread/route';
+import { completePlan, lockPlan } from '@/db';
+import { withActor } from '@/db/scope/scoped';
 
+import { userActor } from '../integration/support/a3';
 import {
   cookieFor,
   idCtx,
@@ -115,6 +119,121 @@ describe('dyad attack', () => {
     expect((await introducedUserIds(t, plan.planId)).sort()).toEqual(
       [plan.hostLeadId, a, b].sort(),
     );
+  });
+
+  /** Drive a tonight solo applicant to `approved` on the given plan. */
+  async function approveTonightSolo(
+    plan: { planId: string; hostLeadId: string },
+    applicantId: string,
+  ): Promise<string> {
+    const cookie = await cookieFor(t, applicantId);
+    const host = await cookieFor(t, plan.hostLeadId);
+    const id = (
+      (await (await createApplicationRoute(req(cookie), idCtx(plan.planId))).json()) as {
+        id: string;
+      }
+    ).id;
+    const res = await approveRoute(req(host), idCtx(id));
+    expect(res.status).toBe(200);
+    return id;
+  }
+
+  it('tonight approve cannot reach a dyad: one approval leaves two attendees, no thread, no introduction', async () => {
+    const plan = await seedPublishedPlan(t, {
+      mode: 'tonight',
+      openSpots: 5,
+      minGroupSize: 1,
+      startsInDays: 1,
+    });
+    // The approve/dyad tests seed the tonight hosting gate directly.
+    await t.pool.query(`UPDATE circle SET plans_hosted = 1 WHERE id = $1`, [plan.hostCircleId]);
+    const guestA = await seedUser(t);
+
+    await approveTonightSolo(plan, guestA);
+
+    const row = await planRow(t, plan.planId);
+    expect(Number(row.confirmed_host_count)).toBe(1);
+    expect(Number(row.accepted_guest_count)).toBe(1); // confirmed_total = 2
+    expect(row.viable_at).toBeNull();
+
+    expect(
+      (await t.pool.query(`SELECT 1 FROM message_thread WHERE plan_id = $1`, [plan.planId]))
+        .rowCount,
+    ).toBe(0);
+    const threadRes = await threadRoute(
+      req(await cookieFor(t, guestA), {}, 'GET'),
+      idCtx(plan.planId),
+    );
+    expect(threadRes.status).toBe(404);
+    expect(await introducedUserIds(t, plan.planId)).toEqual([]);
+
+    await expect(
+      t.pool.query(`UPDATE plan SET viable_at = now() WHERE id = $1`, [plan.planId]),
+    ).rejects.toThrow(/MIN_PLAN_TOTAL/);
+  });
+
+  it('three tonight solos: the third approval — and only the third — latches viability and introduces everyone', async () => {
+    const plan = await seedPublishedPlan(t, {
+      mode: 'tonight',
+      openSpots: 5,
+      minGroupSize: 1,
+      startsInDays: 1,
+    });
+    await t.pool.query(`UPDATE circle SET plans_hosted = 1 WHERE id = $1`, [plan.hostCircleId]);
+    const [a, b] = [await seedUser(t), await seedUser(t)];
+
+    await approveTonightSolo(plan, a);
+    expect((await planRow(t, plan.planId)).viable_at).toBeNull(); // 1 host + 1 guest = 2
+    expect(await introducedUserIds(t, plan.planId)).toEqual([]);
+
+    await approveTonightSolo(plan, b);
+    const row = await planRow(t, plan.planId);
+    expect(row.viable_at).not.toBeNull(); // 1 host + 2 guests = 3
+    expect(
+      (await t.pool.query(`SELECT 1 FROM message_thread WHERE plan_id = $1`, [plan.planId]))
+        .rowCount,
+    ).toBe(1);
+    expect((await introducedUserIds(t, plan.planId)).sort()).toEqual(
+      [plan.hostLeadId, a, b].sort(),
+    );
+  });
+
+  it('Decision B: a 3-host / 0-guest published plan is not viable, cannot complete, and latches only when the first guest accepts', async () => {
+    const plan = await seedPublishedPlan(t, {
+      openSpots: 5,
+      minGroupSize: 1,
+      hostExtraMembers: 2, // 3 active host members, confirmed_host_count = 3
+    });
+
+    let row = await planRow(t, plan.planId);
+    expect(Number(row.confirmed_host_count)).toBe(3);
+    expect(row.viable_at).toBeNull(); // Decision B: a host circle alone is not viable
+    expect(
+      (await t.pool.query(`SELECT 1 FROM message_thread WHERE plan_id = $1`, [plan.planId]))
+        .rowCount,
+    ).toBe(0);
+
+    // complete refuses a non-viable plan even past starts_at.
+    await t.pool.query(`UPDATE plan SET starts_at = now() - interval '1 minute' WHERE id = $1`, [
+      plan.planId,
+    ]);
+    const completeOutcome = await withActor(userActor(plan.hostLeadId), async (executor) => {
+      const locked = await lockPlan(executor, plan.planId);
+      return completePlan(executor, locked!, new Date());
+    });
+    expect(completeOutcome).toBe('not_completable');
+    await t.pool.query(`UPDATE plan SET starts_at = now() + interval '5 days' WHERE id = $1`, [
+      plan.planId,
+    ]);
+
+    // The first accepted guest crosses the floor: 3 hosts + 1 guest, guest >= 1.
+    await acceptSolo(plan, await seedUser(t));
+    row = await planRow(t, plan.planId);
+    expect(row.viable_at).not.toBeNull();
+    expect(
+      (await t.pool.query(`SELECT 1 FROM message_thread WHERE plan_id = $1`, [plan.planId]))
+        .rowCount,
+    ).toBe(1);
   });
 
   it('withdrawing back to two confirmed does not un-cancel viability but also never met', async () => {

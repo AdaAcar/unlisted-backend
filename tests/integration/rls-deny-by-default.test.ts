@@ -494,6 +494,35 @@ describe('RLS deny by default', () => {
     expect(firstNameUpdate.rows[0]?.has).toBe(false);
   });
 
+  it('column-scopes the circle record-counter write to exactly plans_hosted / plans_attended (C7c)', async () => {
+    // 0014: completePlan banks plans_hosted (host circle) and plans_attended
+    // (each distinct guest circle) as a system actor. The grant is exactly
+    // those two columns — no_shows / late_declines stay signal-class and
+    // un-grantable, and it is not a table-wide UPDATE.
+    for (const column of ['plans_hosted', 'plans_attended']) {
+      const granted = await t.pool.query<{ has: boolean }>(
+        `SELECT has_column_privilege('unlisted_app', 'public.circle', $1, 'UPDATE') AS has`,
+        [column],
+      );
+      expect(granted.rows[0]?.has, column).toBe(true);
+    }
+    for (const column of ['no_shows', 'late_declines', 'name']) {
+      const denied = await t.pool.query<{ has: boolean }>(
+        `SELECT has_column_privilege('unlisted_app', 'public.circle', $1, 'UPDATE') AS has`,
+        [column],
+      );
+      expect(denied.rows[0]?.has, column).toBe(false);
+    }
+    const tableWide = await t.pool.query<{ has: boolean }>(
+      `SELECT has_table_privilege('unlisted_app', 'public.circle', 'UPDATE') AS has`,
+    );
+    expect(tableWide.rows[0]?.has).toBe(false);
+    const adminAny = await t.pool.query<{ has: boolean }>(
+      `SELECT has_column_privilege('unlisted_admin', 'public.circle', 'plans_hosted', 'UPDATE') AS has`,
+    );
+    expect(adminAny.rows[0]?.has).toBe(false);
+  });
+
   it('gives admin exactly seven forced-RLS cross-actor SELECT policies', async () => {
     const policies = await t.pool.query<{ cmd: string; tablename: string }>(
       `SELECT tablename, cmd FROM pg_policies
@@ -531,8 +560,13 @@ describe('RLS deny by default', () => {
       { cmd: 'UPDATE', tablename: 'application_member' },
       { cmd: 'INSERT', tablename: 'audit_log' },
       { cmd: 'SELECT', tablename: 'block' },
+      // circle: 0009's insert + members-only read + lead-only update, plus
+      // 0014's system-actor read/write pair (completePlan banks the record
+      // counters as a system actor — C7c Decision C).
       { cmd: 'INSERT', tablename: 'circle' },
       { cmd: 'SELECT', tablename: 'circle' },
+      { cmd: 'SELECT', tablename: 'circle' },
+      { cmd: 'UPDATE', tablename: 'circle' },
       { cmd: 'UPDATE', tablename: 'circle' },
       { cmd: 'INSERT', tablename: 'circle_member' },
       // 0004's `circle_member_app_read` plus 0009's additive
@@ -680,7 +714,9 @@ describe('RLS deny by default', () => {
 
   it('does not let the population function owner update or delete ledger rows', async () => {
     await t.pool.query(
-      `UPDATE plan SET confirmed_host_count = 3, viable_at = now() WHERE id = $1`,
+      // accepted_guest_count = 1 satisfies the Decision B set-time floor (C7c);
+      // the ledger still populates from the one real host member.
+      `UPDATE plan SET confirmed_host_count = 3, accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
       [fixture.planId],
     );
     expect(

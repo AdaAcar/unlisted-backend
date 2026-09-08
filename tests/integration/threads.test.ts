@@ -68,10 +68,13 @@ async function seedViablePlan(hostCount = 3): Promise<{ planId: string; members:
      VALUES ($1,$2,$3, now() + interval '10 days', 5, 1, 'c','bar','published','planned', now())`,
     [planId, circleId, venueId],
   );
-  await t.pool.query(`UPDATE plan SET confirmed_host_count = $2, viable_at = now() WHERE id = $1`, [
-    planId,
-    hostCount,
-  ]);
+  // accepted_guest_count = 1 so the Decision B set-time floor (C7c) is
+  // satisfied; the ledger is still populated from the `hostCount` real host
+  // members, no guest application needed for these thread-shape tests.
+  await t.pool.query(
+    `UPDATE plan SET confirmed_host_count = $2, accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
+    [planId, hostCount],
+  );
   return { planId, members };
 }
 

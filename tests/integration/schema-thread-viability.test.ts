@@ -77,15 +77,19 @@ beforeAll(async () => {
   }
 
   // viablePlan: 3 active host members -> viability latches -> the reconcile
-  // trigger writes 3 ledger rows.
-  await pool.query(`UPDATE plan SET confirmed_host_count = 3, viable_at = now() WHERE id = $1`, [
-    viablePlanId,
-  ]);
+  // trigger writes 3 ledger rows. accepted_guest_count = 1 satisfies the
+  // Decision B set-time floor (C7c); no guest application is needed for these
+  // thread-shape tests, so the ledger stays at the 3 real host members.
+  await pool.query(
+    `UPDATE plan SET confirmed_host_count = 3, accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
+    [viablePlanId],
+  );
   // shortLedgerPlan: counters say viable (set-time floor is on the counters),
   // but the host circle has ONE active member, so the ledger gets one row.
-  await pool.query(`UPDATE plan SET confirmed_host_count = 3, viable_at = now() WHERE id = $1`, [
-    shortLedgerPlanId,
-  ]);
+  await pool.query(
+    `UPDATE plan SET confirmed_host_count = 3, accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
+    [shortLedgerPlanId],
+  );
 });
 
 afterAll(async () => {
@@ -209,5 +213,22 @@ describe('viability set-time floor', () => {
         [shortPlanId],
       ),
     ).rejects.toThrow(/below MIN_PLAN_TOTAL/);
+  });
+
+  it('rejects stamping viable_at for a host circle alone with zero accepted guests (Decision B, C7c)', async () => {
+    const hostOnlyPlanId = ulid();
+    await t.pool.query(
+      `INSERT INTO plan (id, host_circle_id, venue_id, starts_at, open_spots, min_group_size,
+                         district, venue_type, state, mode)
+       VALUES ($1, $2, $3, now() + interval '10 days', 5, 2, 'centre','bar','published','planned')`,
+      [hostOnlyPlanId, bigCircleId, venueId],
+    );
+    await expect(
+      t.pool.query(
+        `UPDATE plan SET confirmed_host_count = 5, accepted_guest_count = 0, viable_at = now()
+          WHERE id = $1`,
+        [hostOnlyPlanId],
+      ),
+    ).rejects.toThrow(/MIN_PLAN_TOTAL or with no accepted guest/);
   });
 });

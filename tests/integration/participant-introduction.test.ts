@@ -37,8 +37,11 @@ async function introducedUsers(planId: string): Promise<string[]> {
 }
 
 async function makeViable(fixture: PlanFixture): Promise<void> {
+  // accepted_guest_count = 1 satisfies the Decision B set-time floor (C7c). The
+  // ledger population reads real circle_member / application rows, not these
+  // counters, so this does not add anyone to the introduction ledger.
   await t.pool.query(
-    `UPDATE plan SET confirmed_host_count = 3, viable_at = clock_timestamp() WHERE id = $1`,
+    `UPDATE plan SET confirmed_host_count = 3, accepted_guest_count = 1, viable_at = clock_timestamp() WHERE id = $1`,
     [fixture.planId],
   );
 }

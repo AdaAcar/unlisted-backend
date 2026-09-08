@@ -74,18 +74,28 @@ export function computeMode(startsAt: Date, now: Date): PlanMode {
   return hours >= config.SPONTANEOUS_THRESHOLD_H ? 'planned' : 'tonight';
 }
 
-export function isViable(total: number): boolean {
-  return total >= config.MIN_PLAN_TOTAL;
+/**
+ * Decision B (docs/state.md Decisions C7b + C7c): a plan is viable only when
+ * `confirmed host members + accepted guests >= MIN_PLAN_TOTAL` AND at least one
+ * of those is an accepted guest. A host circle meeting itself (guests = 0) is
+ * not a plan that came together. Strictly stricter than docs/modes.md's rule —
+ * it never weakens the invariant. Takes the same snapshot shape `confirmedTotal`
+ * does, so there is no argument-order footgun.
+ */
+export function isViable(
+  snapshot: Pick<PlanSnapshot, 'confirmedHostCount' | 'acceptedGuestCount'>,
+): boolean {
+  return confirmedTotal(snapshot) >= config.MIN_PLAN_TOTAL && snapshot.acceptedGuestCount >= 1;
 }
 
 /** The latch: never clears once set; latches to `now` on first crossing. */
 export function computeViableAt(
   currentViableAt: Date | null,
-  total: number,
+  snapshot: Pick<PlanSnapshot, 'confirmedHostCount' | 'acceptedGuestCount'>,
   now: Date,
 ): Date | null {
   if (currentViableAt !== null) return currentViableAt;
-  return isViable(total) ? now : null;
+  return isViable(snapshot) ? now : null;
 }
 
 function requireState(snapshot: PlanSnapshot, allowed: readonly PlanState[]): void {
@@ -109,7 +119,7 @@ function withRecomputedViability(snapshot: PlanSnapshot, now: Date): PlanSnapsho
   if (snapshot.acceptedGuestCount + snapshot.heldCount > snapshot.openSpots) {
     throw new DomainError('capacity ceiling exceeded: accepted + held over open spots');
   }
-  const viableAt = computeViableAt(snapshot.viableAt, confirmedTotal(snapshot), now);
+  const viableAt = computeViableAt(snapshot.viableAt, snapshot, now);
   return { ...snapshot, viableAt };
 }
 
@@ -117,7 +127,7 @@ function applyClosure(snapshot: PlanSnapshot, trigger: ClosureTrigger, now: Date
   const applicationsClosedAt = snapshot.applicationsClosedAt ?? now;
 
   if (trigger === 'starts_at') {
-    if (!isViable(confirmedTotal(snapshot))) {
+    if (!isViable(snapshot)) {
       return {
         ...snapshot,
         applicationsClosedAt,
@@ -230,7 +240,7 @@ export function transitionPlan(snapshot: PlanSnapshot, action: PlanAction): Plan
       if (action.now.getTime() < snapshot.startsAt.getTime()) {
         throw new DomainError('cannot complete a plan before it starts');
       }
-      if (!isViable(confirmedTotal(snapshot))) {
+      if (!isViable(snapshot)) {
         throw new DomainError('cannot complete a non-viable plan');
       }
       return { ...snapshot, state: 'completed' };
