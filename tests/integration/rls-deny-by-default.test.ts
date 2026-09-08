@@ -260,6 +260,7 @@ describe('RLS deny by default', () => {
            'app_actor_is_application_party',
            'app_actor_has_capacity_stake_in_plan',
            'app_user_has_overlapping_accepted_plan',
+           'app_plan_guest_circle_ids',
            'enforce_plan_capacity_scope',
            'reconcile_plan_participant_introductions',
            'reconcile_introductions_from_plan',
@@ -288,6 +289,9 @@ describe('RLS deny by default', () => {
       'app_actor_is_application_party(counterparty_application_id character varying)',
       'app_actor_has_capacity_stake_in_plan(counterparty_plan_id character varying)',
       'app_user_has_overlapping_accepted_plan(subject_user_id character varying, window_start timestamp with time zone, window_end timestamp with time zone, exclude_application_id character varying)',
+      // C7c fix (0015): the guest-circle read for Decision C's plans_attended
+      // counter — SECURITY DEFINER so E1's SYSTEM_ACTOR caller is not scoped out.
+      'app_plan_guest_circle_ids(target_plan_id character varying)',
     ]);
     const adminFunctions = new Set([
       'app_current_actor_id()',
@@ -306,6 +310,9 @@ describe('RLS deny by default', () => {
       'app_actor_is_application_party(counterparty_application_id character varying)',
       'app_actor_has_capacity_stake_in_plan(counterparty_plan_id character varying)',
       'app_user_has_overlapping_accepted_plan(subject_user_id character varying, window_start timestamp with time zone, window_end timestamp with time zone, exclude_application_id character varying)',
+      // C7c fix (0015): owned by unlisted_admin, so admin holds EXECUTE via
+      // ownership even though only unlisted_app gets an explicit GRANT.
+      'app_plan_guest_circle_ids(target_plan_id character varying)',
     ]);
     const populationFunctions = new Set([
       'reconcile_plan_participant_introductions(target_plan_id character varying, introduction_time timestamp with time zone)',
@@ -329,7 +336,7 @@ describe('RLS deny by default', () => {
         expect(row.adminCanExecute).toBe(false);
       }
     }
-    expect(functions.rows).toHaveLength(21);
+    expect(functions.rows).toHaveLength(22);
   });
 
   it('grants app and admin exactly the six-table SELECT surface, plus the app-only audit_log INSERT, the session grants (B1), the verification column grants (B2), and the app-only circle read + circle/circle_member write grants (C1), and no other mutations', async () => {

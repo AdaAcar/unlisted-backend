@@ -106,6 +106,13 @@
       "when": 1788859515012,
       "tag": "0014_tighten_viability",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1788863880388,
+      "tag": "0015_plan_guest_circles",
+      "breakpoints": true
     }
   ]
 }

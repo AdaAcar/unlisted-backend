@@ -58,7 +58,7 @@ afterAll(async () => {
 });
 
 describe('transaction-local migration capability activation', () => {
-  it('lets the one-shot bootstrap runner execute and record all of 0014', async () => {
+  it('lets the one-shot bootstrap runner execute and record all of 0015', async () => {
     const state = await t.pool.query<{ n: number; schema_owner: string; table_owner: string }>(
       `SELECT
          (SELECT count(*)::int FROM drizzle.__drizzle_migrations) AS n,
@@ -70,13 +70,13 @@ describe('transaction-local migration capability activation', () => {
        WHERE n.nspname = 'drizzle'`,
     );
     expect(state.rows).toEqual([
-      { n: 15, schema_owner: 'unlisted_migrator', table_owner: 'unlisted_migrator' },
+      { n: 16, schema_owner: 'unlisted_migrator', table_owner: 'unlisted_migrator' },
     ]);
   });
 
   it('denies the NOINHERIT deployer before role activation, then records and owns a future migration', async () => {
     const migrations = isolatedFutureMigration(
-      '0015_future_probe',
+      '0016_future_probe',
       'CREATE TABLE public.a3_future_migration_probe (id integer PRIMARY KEY);\n',
     );
 
@@ -92,7 +92,7 @@ describe('transaction-local migration capability activation', () => {
       `SELECT to_regclass('public.a3_future_migration_probe')::text AS table_name`,
     );
     expect(before.rows[0]?.table_name).toBeNull();
-    expect((await t.pool.query(`SELECT * FROM drizzle.__drizzle_migrations`)).rowCount).toBe(15);
+    expect((await t.pool.query(`SELECT * FROM drizzle.__drizzle_migrations`)).rowCount).toBe(16);
 
     await invokeRunner(migrations);
 
@@ -103,7 +103,7 @@ describe('transaction-local migration capability activation', () => {
        FROM pg_class c
        WHERE c.oid = 'public.a3_future_migration_probe'::regclass`,
     );
-    expect(applied.rows).toEqual([{ n: 16, owner: 'unlisted_migrator' }]);
+    expect(applied.rows).toEqual([{ n: 17, owner: 'unlisted_migrator' }]);
   });
 
   it('permanently closes its dedicated connection when a migration fails', async () => {

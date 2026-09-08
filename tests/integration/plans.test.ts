@@ -7,7 +7,8 @@ import { GET as getPlanRoute, PATCH as patchPlanRoute } from '@/app/api/plans/[i
 import { POST as publishPlanRoute } from '@/app/api/plans/[id]/publish/route';
 import { POST as cancelPlanRoute } from '@/app/api/plans/[id]/cancel/route';
 import { POST as closePlanRoute } from '@/app/api/plans/[id]/close/route';
-import { closePlanAtStartsAt, completePlan, lockPlan } from '@/db';
+import { closePlanAtStartsAt, completePlan, lockPlan, type LockedPlan } from '@/db';
+import { SYSTEM_ACTOR } from '@/db/scope/actor';
 import { withActor } from '@/db/scope/scoped';
 import { generateSessionToken, hashSessionToken } from '@/lib/sessionToken';
 
@@ -789,5 +790,177 @@ describe('closePlanAtStartsAt / completePlan (E1 write helpers)', () => {
     );
     expect(host.rows[0]).toEqual({ plans_hosted: 1, plans_attended: 0 });
     expect(guest.rows[0]).toEqual({ plans_hosted: 0, plans_attended: 1 });
+  });
+
+  // --- C7c fix (0015): the guest-circle read must not depend on the caller's
+  // `application` visibility. E1's worker will be the first production caller
+  // and runs as SYSTEM_ACTOR. -------------------------------------------------
+
+  interface GuestCircleSeed {
+    circleId: string;
+    leadId: string;
+  }
+
+  /**
+   * A published, viable, past-`starts_at` plan ready for `completePlan`, plus a
+   * guest circle with one live accepted/approved circle application on it.
+   * `mode` picks which arm — a `planned` circle app is `accepted`; a `tonight`
+   * circle app is `approved`. NOTE: C5 makes every tonight application solo, so
+   * a tonight *circle* application cannot be created through the API — it is
+   * seeded directly here purely to cover the helper's `tonight`/`approved`
+   * branch.
+   */
+  async function seedCompletablePlanWithGuestCircle(
+    mode: 'planned' | 'tonight',
+  ): Promise<{ planId: string; host: GuestCircleSeed; guest: GuestCircleSeed }> {
+    const { circleId: hostCircleId, leadId: hostLeadId } = await seedCircle(2); // 3 active hosts
+    const { id: venueId } = await seedVenue();
+    const cookie = await cookieFor(hostLeadId);
+    // Publish derives the mode from the horizon (planned >= SPONTANEOUS_THRESHOLD_H,
+    // else tonight) and it is immutable after — so choose the horizon, not a
+    // post-publish UPDATE.
+    const planId = await createDraft(cookie, hostCircleId, venueId, {
+      ...(mode === 'tonight' ? { startsInHours: 5 } : { startsInDays: 3 }),
+      openSpots: 2,
+    });
+    await publishPlanRoute(jsonReq(cookie, undefined), idCtx(planId));
+
+    const guestLeadId = await seedUser();
+    const guestCircleId = ulid();
+    await t.pool.query(`INSERT INTO circle (id, name, lead_user_id) VALUES ($1, 'Guests', $2)`, [
+      guestCircleId,
+      guestLeadId,
+    ]);
+    await t.pool.query(
+      `INSERT INTO circle_member (id, circle_id, user_id, role, status, joined_at)
+       VALUES ($1, $2, $3, 'lead', 'active', now())`,
+      [ulid(), guestCircleId, guestLeadId],
+    );
+    const appId = ulid();
+    const appState = mode === 'planned' ? 'accepted' : 'approved';
+    await t.pool.query(
+      `INSERT INTO application (id, plan_id, applicant_circle_id, mode, state, submitted_at)
+       VALUES ($1, $2, $3, $4, $5, now())`,
+      [appId, planId, guestCircleId, mode, appState],
+    );
+    await t.pool.query(
+      `INSERT INTO application_member (id, application_id, user_id, invitation_state)
+       VALUES ($1, $2, $3, 'accepted')`,
+      [ulid(), appId, guestLeadId],
+    );
+    await t.pool.query(
+      `UPDATE plan SET accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
+      [planId],
+    );
+    await t.pool.query(`UPDATE plan SET starts_at = now() - interval '1 minute' WHERE id = $1`, [
+      planId,
+    ]);
+
+    return {
+      planId,
+      host: { circleId: hostCircleId, leadId: hostLeadId },
+      guest: { circleId: guestCircleId, leadId: guestLeadId },
+    };
+  }
+
+  /** Build a LockedPlan straight from the row (bypasses lockPlan's RLS, which a
+   *  SYSTEM_ACTOR cannot pass — see docs/state.md Known gaps C5/C6/C7a). */
+  async function rawLockedPlan(planId: string): Promise<LockedPlan> {
+    const { rows } = await t.pool.query(`SELECT * FROM plan WHERE id = $1`, [planId]);
+    const r = rows[0] as Record<string, unknown>;
+    return {
+      id: r.id as string,
+      hostCircleId: r.host_circle_id as string,
+      venueId: r.venue_id as string,
+      state: r.state as LockedPlan['state'],
+      mode: r.mode as LockedPlan['mode'],
+      startsAt: new Date(r.starts_at as string),
+      endsAt: r.ends_at ? new Date(r.ends_at as string) : null,
+      openSpots: Number(r.open_spots),
+      minGroupSize: Number(r.min_group_size),
+      note: (r.note as string | null) ?? null,
+      confirmedHostCount: Number(r.confirmed_host_count),
+      acceptedGuestCount: Number(r.accepted_guest_count),
+      heldCount: Number(r.held_count),
+      viableAt: r.viable_at ? new Date(r.viable_at as string) : null,
+      applicationsClosedAt: r.applications_closed_at
+        ? new Date(r.applications_closed_at as string)
+        : null,
+      cancellationKind: (r.cancellation_kind as LockedPlan['cancellationKind']) ?? null,
+    };
+  }
+
+  async function circleCounters(
+    circleId: string,
+  ): Promise<{ plans_hosted: number; plans_attended: number }> {
+    const { rows } = await t.pool.query<{ plans_hosted: number; plans_attended: number }>(
+      `SELECT plans_hosted, plans_attended FROM circle WHERE id = $1`,
+      [circleId],
+    );
+    return rows[0]!;
+  }
+
+  it('REGRESSION: completePlan run as SYSTEM_ACTOR still banks plans_hosted and plans_attended', async () => {
+    // Before 0015 this failed with plans_attended = 0 (empty result, no error):
+    // the inline `SELECT ... FROM application` ran under app_application_visible,
+    // which matches nothing for a system: actor id. The 0015 SECURITY DEFINER
+    // helper does not depend on the caller's scope.
+    const { planId, host, guest } = await seedCompletablePlanWithGuestCircle('planned');
+
+    const outcome = await withActor(SYSTEM_ACTOR, async (executor) => {
+      const locked = await rawLockedPlan(planId);
+      return completePlan(executor, locked, new Date());
+    });
+    expect(outcome).toBe('completed');
+
+    expect(await circleCounters(host.circleId)).toEqual({ plans_hosted: 1, plans_attended: 0 });
+    expect(await circleCounters(guest.circleId)).toEqual({ plans_hosted: 0, plans_attended: 1 });
+  });
+
+  it('the guest-circle read covers the tonight/approved branch too (seeded directly — C5 makes tonight solo)', async () => {
+    const { planId, host, guest } = await seedCompletablePlanWithGuestCircle('tonight');
+
+    await withActor(SYSTEM_ACTOR, async (executor) => {
+      const locked = await rawLockedPlan(planId);
+      return completePlan(executor, locked, new Date());
+    });
+
+    expect(await circleCounters(host.circleId)).toEqual({ plans_hosted: 1, plans_attended: 0 });
+    expect(await circleCounters(guest.circleId)).toEqual({ plans_hosted: 0, plans_attended: 1 });
+  });
+
+  it('a solo guest accrues nothing — no circle, no counter', async () => {
+    const { circleId: hostCircleId, leadId } = await seedCircle(2);
+    const { id: venueId } = await seedVenue();
+    const cookie = await cookieFor(leadId);
+    const planId = await createDraft(cookie, hostCircleId, venueId, {
+      startsInDays: 3,
+      openSpots: 2,
+    });
+    await publishPlanRoute(jsonReq(cookie, undefined), idCtx(planId));
+
+    // A solo accepted applicant — no applicant_circle_id.
+    const soloGuest = await seedUser();
+    await t.pool.query(
+      `INSERT INTO application (id, plan_id, solo_user_id, mode, state, submitted_at)
+       VALUES ($1, $2, $3, 'planned', 'accepted', now())`,
+      [ulid(), planId, soloGuest],
+    );
+    await t.pool.query(
+      `UPDATE plan SET accepted_guest_count = 1, viable_at = now() WHERE id = $1`,
+      [planId],
+    );
+    await t.pool.query(`UPDATE plan SET starts_at = now() - interval '1 minute' WHERE id = $1`, [
+      planId,
+    ]);
+
+    await withActor(SYSTEM_ACTOR, async (executor) => {
+      const locked = await rawLockedPlan(planId);
+      return completePlan(executor, locked, new Date());
+    });
+
+    // Only the host circle's counter moved; the solo guest has no circle row to
+    // bank against.
+    expect(await circleCounters(hostCircleId)).toEqual({ plans_hosted: 1, plans_attended: 0 });
   });
 });

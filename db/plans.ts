@@ -405,20 +405,18 @@ export async function completePlan(
     UPDATE plan SET state = ${next.state}, completed_at = ${now} WHERE id = ${plan.id}
   `);
 
-  // Distinct guest circles with a live accepted/approved application — read
-  // under the caller's actor (a host-circle member can see the plan's
-  // applications via application_app_read).
+  // Distinct guest circles with a live accepted/approved application. Read
+  // through the 0015 SECURITY DEFINER helper, NOT a caller-scoped SELECT on
+  // `application`: the first production caller is E1's worker running as
+  // SYSTEM_ACTOR, for whom `app_application_visible` matches nothing — an
+  // inline read would silently bank nothing for anybody (docs/state.md
+  // Decisions C7b + C7c). The helper does not depend on the caller's scope, so
+  // it stays outside `asSystemActor` — a read that decides which circles,
+  // separate from the system-actor block that moves the counters.
   const guestCircleRows = (
-    await executor.execute(sql`
-      SELECT DISTINCT applicant_circle_id AS "circleId"
-        FROM application
-       WHERE plan_id = ${plan.id}
-         AND applicant_circle_id IS NOT NULL
-         AND (
-           (mode = 'planned' AND state = 'accepted')
-           OR (mode = 'tonight' AND state = 'approved')
-         )
-    `)
+    await executor.execute(
+      sql`SELECT c AS "circleId" FROM app_plan_guest_circle_ids(${plan.id}) AS c`,
+    )
   ).rows as { circleId: string }[];
 
   await asSystemActor(executor, 'complete_plan', async () => {
